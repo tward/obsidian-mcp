@@ -7,7 +7,7 @@
 - 🖼️ **Image support** - View and analyze images from your vault
 - 🔍 **Powerful regex search** - Find complex patterns in your notes
 - 🗂️ **Property search** - Query by frontmatter properties (status, priority, etc.)
-- 🚀 **One-command setup** - Auto-configure Claude Desktop with `uvx --from obsidian-mcp obsidian-mcp-configure`
+- 🚀 **One-command setup** - Auto-configure Claude Desktop with `uvx --from obsidian-mcp obsidian-mcp-configure --vault-path /path/to/your/vault`
 - 🔄 **Direct filesystem access** - No plugins required, works offline
 - 📦 **90% less memory usage** - Efficient streaming architecture
 
