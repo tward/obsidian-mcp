@@ -7,7 +7,7 @@
 - 🖼️ **Image support** - View and analyze images from your vault
 - 🔍 **Powerful regex search** - Find complex patterns in your notes
 - 🗂️ **Property search** - Query by frontmatter properties (status, priority, etc.)
-- 🚀 **One-command setup** - Auto-configure Claude Desktop with `uvx obsidian-mcp-configure`
+- 🚀 **One-command setup** - Auto-configure Claude Desktop with `uvx --from obsidian-mcp obsidian-mcp-configure`
 - 🔄 **Direct filesystem access** - No plugins required, works offline
 - 📦 **90% less memory usage** - Efficient streaming architecture
 
@@ -45,7 +45,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 
 ```bash
 # Install and configure in one step
-uvx obsidian-mcp-configure --vault-path /path/to/your/vault
+uvx --from obsidian-mcp obsidian-mcp-configure --vault-path /path/to/your/vault
 ```
 
 This command will:
@@ -915,7 +915,7 @@ Use 'created' to find notes by creation date, 'modified' for last edit date
 - 🖼️ **Image support** - View and analyze images from your vault with automatic resizing
 - 🔍 **Regex power search** - Find complex patterns with optimized streaming
 - 🗂️ **Property search** - Query notes by frontmatter properties with advanced operators
-- 🎯 **One-command setup** - Auto-configure Claude Desktop with `uvx obsidian-mcp-configure`
+- 🎯 **One-command setup** - Auto-configure Claude Desktop with `uvx --from obsidian-mcp obsidian-mcp-configure`
 - 📦 **90% less memory usage** - Efficient streaming architecture
 - 🔄 **No plugins required** - Works offline without needing Obsidian to be running
 - ✨ **Incremental indexing** - Only re-indexes changed files
