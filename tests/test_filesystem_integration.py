@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""Integration tests for filesystem-based Obsidian MCP server."""
+
+import os
+import asyncio
+import shutil
+import tempfile
+from pathlib import Path
+import pytest
+import pytest_asyncio
+
+# Add parent directory to path
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from obsidian_mcp.utils.filesystem import ObsidianVault, init_vault
+from obsidian_mcp.tools import (
+    read_note, create_note, update_note, delete_note,
+    search_notes, list_notes, read_image
+)
+
+
+class TestObsidianFilesystem:
+    """Test suite for filesystem operations."""
+    
+    @pytest_asyncio.fixture
+    async def test_vault(self):
+        """Create a temporary test vault."""
+        # Create temporary directory
+        temp_dir = tempfile.mkdtemp(prefix="obsidian_test_")
+        
+        # Set environment variable
+        os.environ["OBSIDIAN_VAULT_PATH"] = temp_dir
+        
+        # Initialize vault
+        vault = init_vault(temp_dir)
+        
+        # Create some test content
+        test_notes = {
+            "test_note.md": """# Test Note
+
+This is a test note with some content.
+
+Tags: #test #demo
+
+## Links
+
+- [[Another Note]]
+- [External Link](https://example.com)
+""",
+            "folder/nested_note.md": """---
+title: Nested Note
+tags: [nested, example]
+aliases:
+  - nested-example
+  - example-note
+---
+
+# Nested Note
+
+This note is in a folder.
+
+#inline-tag
+""",
+            "images/test_image.md": """# Image Test
+
+Here's an image reference:
+
+![[test_image.png]]
+
+And another style:
+![Alt text](test_image.png)
+"""
+        }
+        
+        # Create test notes
+        for path, content in test_notes.items():
+            full_path = Path(temp_dir) / path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content)
+        
+        # Create a test image
+        image_path = Path(temp_dir) / "images" / "test_image.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        # Create a minimal PNG file (1x1 pixel)
+        image_path.write_bytes(
+            b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+            b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f'
+            b'\x00\x00\x01\x01\x00\x05\xf8\xdc\xccO\x00\x00\x00\x00IEND\xaeB`\x82'
+        )
+        
+        yield vault
+        
+        # Cleanup
+        shutil.rmtree(temp_dir)
+    
+    @pytest.mark.asyncio
+    async def test_read_note(self, test_vault):
+        """Test reading a note."""
+        result = await read_note("test_note.md")
+        
+        assert result["path"] == "test_note.md"
+        assert "Test Note" in result["content"]
+        assert "test" in result["metadata"]["tags"]
+        assert "demo" in result["metadata"]["tags"]
+    
+    @pytest.mark.asyncio
+    async def test_read_note_with_frontmatter(self, test_vault):
+        """Test reading a note with YAML frontmatter."""
+        result = await read_note("folder/nested_note.md")
+        
+        assert result["path"] == "folder/nested_note.md"
+        assert result["metadata"]["frontmatter"]["title"] == "Nested Note"
+        assert "nested" in result["metadata"]["tags"]
+        assert "inline-tag" in result["metadata"]["tags"]
+        assert "nested-example" in result["metadata"]["aliases"]
+    
+    @pytest.mark.asyncio
+    async def test_create_note(self, test_vault):
+        """Test creating a new note."""
+        content = """# New Note
+
+This is a newly created note.
+
+#created-tag
+"""
+        result = await create_note("new_note.md", content)
+        
+        assert result["path"] == "new_note.md"
+        assert result["created"] == True
+        assert "created-tag" in result["metadata"]["tags"]
+        
+        # Verify it was actually created
+        read_result = await read_note("new_note.md")
+        assert read_result["content"] == content
+    
+    @pytest.mark.asyncio
+    async def test_update_note(self, test_vault):
+        """Test updating an existing note."""
+        new_content = """# Updated Test Note
+
+This content has been updated.
+
+#updated
+"""
+        result = await update_note("test_note.md", new_content)
+        
+        assert result["path"] == "test_note.md"
+        assert result["updated"] == True
+        
+        # Verify the update
+        read_result = await read_note("test_note.md")
+        assert "Updated Test Note" in read_result["content"]
+        assert "updated" in read_result["metadata"]["tags"]
+    
+    @pytest.mark.asyncio
+    async def test_delete_note(self, test_vault):
+        """Test deleting a note."""
+        # First create a note to delete
+        await create_note("to_delete.md", "# To Delete")
+        
+        # Delete it
+        result = await delete_note("to_delete.md")
+        assert result["deleted"] == True
+        
+        # Verify it's gone
+        with pytest.raises(FileNotFoundError):
+            await read_note("to_delete.md")
+    
+    @pytest.mark.asyncio
+    async def test_search_notes(self, test_vault):
+        """Test searching notes."""
+        result = await search_notes("test")
+        
+        assert result["count"] > 0
+        assert any("test_note.md" in r["path"] for r in result["results"])
+    
+    @pytest.mark.asyncio
+    async def test_search_by_tag(self, test_vault):
+        """Test searching by tag."""
+        result = await search_notes("tag:nested")
+        
+        assert result["count"] == 1
+        assert result["results"][0]["path"] == "folder/nested_note.md"
+    
+    @pytest.mark.asyncio
+    async def test_list_notes(self, test_vault):
+        """Test listing notes."""
+        result = await list_notes()
+        
+        assert result["count"] >= 3
+        paths = [n["path"] for n in result["notes"]]
+        assert "test_note.md" in paths
+        assert "folder/nested_note.md" in paths
+    
+    @pytest.mark.asyncio
+    async def test_read_image(self, test_vault):
+        """Test reading an image."""
+        result = await read_image("images/test_image.png")
+        
+        assert result["path"] == "images/test_image.png"
+        assert result["mime_type"] == "image/png"
+        assert "content" in result  # Base64 encoded
+    
+    @pytest.mark.asyncio
+    async def test_read_note_with_images(self, test_vault):
+        """Test reading a note with embedded images."""
+        result = await read_note("images/test_image.md", include_images=True)
+        
+        assert "images" in result
+        assert len(result["images"]) > 0
+        assert result["images"][0]["path"] == "images/test_image.png"
+        assert result["images"][0]["mime_type"] == "image/png"
+    
+    @pytest.mark.asyncio
+    async def test_performance_search(self, test_vault):
+        """Test search performance with indexing."""
+        import time
+        
+        # First search (builds index)
+        start = time.time()
+        result1 = await search_notes("test")
+        first_time = time.time() - start
+        
+        # Second search (uses cache)
+        start = time.time()
+        result2 = await search_notes("note")
+        second_time = time.time() - start
+        
+        # Second search should be faster
+        assert second_time < first_time
+        assert result1["count"] > 0
+        assert result2["count"] > 0
+
+
+if __name__ == "__main__":
+    # Run tests with pytest
+    pytest.main([__file__, "-v"])
