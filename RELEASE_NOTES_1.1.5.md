@@ -34,12 +34,12 @@ Completely rewritten link management implementation with dramatic performance ga
 
 ## 📊 Example
 
-For a note with links like `[[Apple TOC]]` where the actual note is at `Apple/Apple TOC.md`:
+For a note with links like `[[Project TOC]]` where the actual note is at `Projects/Project TOC.md`:
 
 **Before (v1.1.4)**:
 ```json
 {
-  "path": "Apple TOC.md",
+  "path": "Project TOC.md",
   "exists": false  // ❌ Incorrectly marked as broken
 }
 ```
@@ -47,9 +47,9 @@ For a note with links like `[[Apple TOC]]` where the actual note is at `Apple/Ap
 **After (v1.1.5)**:
 ```json
 {
-  "path": "Apple TOC.md",
+  "path": "Project TOC.md",
   "exists": true,  // ✅ Correctly identified as valid
-  "actual_path": "Apple/Apple TOC.md"  // Shows where it actually exists
+  "actual_path": "Projects/Project TOC.md"  // Shows where it actually exists
 }
 ```
 

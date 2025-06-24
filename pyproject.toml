@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "obsidian-mcp"
-version = "1.1.9"
-description = "MCP server for interacting with Obsidian vaults through the Local REST API"
+version = "2.0.0"
+description = "MCP server for interacting with Obsidian vaults through direct filesystem access"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Nate Strong", email = "nathanstrong.fx@gmail.com"}
 ]
@@ -24,10 +24,12 @@ classifiers = [
 
 dependencies = [
     "fastmcp>=2.8.1",
-    "httpx>=0.25.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
-    "urllib3>=2.0.0",
+    "aiofiles>=23.0.0",
+    "pyyaml>=6.0.0",
+    "pillow>=10.0.0",
+    "aiosqlite>=0.19.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +46,7 @@ Issues = "https://github.com/natestrong/obsidian-mcp/issues"
 
 [project.scripts]
 obsidian-mcp = "obsidian_mcp.server:main"
+obsidian-mcp-configure = "obsidian_mcp.configure:main"
 
 [tool.setuptools]
 packages = ["obsidian_mcp", "obsidian_mcp.tools", "obsidian_mcp.utils", "obsidian_mcp.models"]
