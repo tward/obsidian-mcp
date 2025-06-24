@@ -9,6 +9,7 @@ from .note_management import (
 from .search_discovery import (
     search_notes,
     search_by_date,
+    search_by_regex,
     list_notes,
     list_folders,
 )
@@ -40,6 +41,7 @@ __all__ = [
     # Search and discovery
     "search_notes",
     "search_by_date",
+    "search_by_regex",
     "list_notes",
     "list_folders",
     # Organization

@@ -1,5 +1,6 @@
 """Search and discovery tools for Obsidian MCP server."""
 
+import re
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -466,4 +467,143 @@ async def list_folders(
             "count": 0,
             "folders": [],
             "error": f"Failed to list folders: {str(e)}"
+        }
+
+
+async def search_by_regex(
+    pattern: str,
+    flags: Optional[List[str]] = None,
+    context_length: int = 100,
+    max_results: int = 50,
+    ctx=None
+) -> dict:
+    """
+    Search for notes using regular expressions for advanced pattern matching.
+    
+    Use this tool when you need to find specific patterns in your notes, especially
+    useful for finding code snippets, structured data, or complex text patterns.
+    Regular expressions provide powerful pattern matching capabilities.
+    
+    Args:
+        pattern: Regular expression pattern to search for
+        flags: List of regex flags to apply (optional). Supported flags:
+               - "ignorecase" or "i": Case-insensitive matching
+               - "multiline" or "m": ^ and $ match line boundaries
+               - "dotall" or "s": . matches newlines
+        context_length: Number of characters to show around matches (default: 100)
+        max_results: Maximum number of results to return (default: 50)
+        ctx: MCP context for progress reporting
+        
+    Returns:
+        Dictionary containing search results with matched patterns and context
+        
+    Example:
+        >>> # Find Python function definitions with 'search' in the name
+        >>> await search_by_regex(r"def\\s+\\w*search\\w*\\s*\\([^)]*\\):", flags=["ignorecase"])
+        {
+            "pattern": "def\\s+\\w*search\\w*\\s*\\([^)]*\\):",
+            "count": 3,
+            "results": [
+                {
+                    "path": "code/search_utils.py",
+                    "match_count": 2,
+                    "matches": [
+                        {
+                            "match": "def search_notes(query, limit):",
+                            "line": 15,
+                            "context": "...async def search_notes(query, limit):\\n    '''Search through all notes'''..."
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        >>> # Find TODO comments with priorities
+        >>> await search_by_regex(r"#\\s*TODO\\s*\\[(?P<priority>\\w+)\\].*", flags=["ignorecase"])
+        
+        >>> # Find markdown links
+        >>> await search_by_regex(r"\\[([^\\]]+)\\]\\(([^)]+)\\)")
+    """
+    # Validate regex pattern
+    try:
+        # Test compile the pattern
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid regular expression pattern: {e}")
+    
+    # Validate context_length
+    is_valid, error = validate_context_length(context_length)
+    if not is_valid:
+        raise ValueError(error)
+    
+    # Convert string flags to regex flags
+    regex_flags = 0
+    if flags:
+        flag_map = {
+            "ignorecase": re.IGNORECASE,
+            "i": re.IGNORECASE,
+            "multiline": re.MULTILINE,
+            "m": re.MULTILINE,
+            "dotall": re.DOTALL,
+            "s": re.DOTALL
+        }
+        for flag in flags:
+            if flag.lower() in flag_map:
+                regex_flags |= flag_map[flag.lower()]
+            else:
+                raise ValueError(f"Unknown regex flag: {flag}. Supported flags: ignorecase/i, multiline/m, dotall/s")
+    
+    if ctx:
+        ctx.info(f"Searching with regex pattern: {pattern}")
+    
+    vault = get_vault()
+    
+    try:
+        # Perform regex search
+        results = await vault.search_by_regex(pattern, regex_flags, context_length, max_results)
+        
+        # Format results for output
+        formatted_results = []
+        for result in results:
+            formatted_result = {
+                "path": result["path"],
+                "match_count": result["match_count"],
+                "matches": []
+            }
+            
+            # Include match details
+            for match in result["matches"]:
+                match_info = {
+                    "match": match["match"],
+                    "line": match["line"],
+                    "context": match["context"]
+                }
+                
+                # Include capture groups if present
+                if match["groups"]:
+                    match_info["groups"] = match["groups"]
+                
+                formatted_result["matches"].append(match_info)
+            
+            formatted_results.append(formatted_result)
+        
+        return {
+            "pattern": pattern,
+            "flags": flags or [],
+            "count": len(formatted_results),
+            "results": formatted_results
+        }
+        
+    except ValueError as e:
+        # Re-raise validation errors
+        raise e
+    except Exception as e:
+        if ctx:
+            ctx.info(f"Regex search failed: {str(e)}")
+        return {
+            "pattern": pattern,
+            "flags": flags or [],
+            "count": 0,
+            "results": [],
+            "error": f"Regex search failed: {str(e)}"
         }

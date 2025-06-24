@@ -378,6 +378,95 @@ class ObsidianVault:
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:max_results]
     
+    async def search_by_regex(self, pattern: str, flags: int = 0, context_length: int = 100, max_results: int = 50) -> List[Dict[str, Any]]:
+        """
+        Search for notes matching a regular expression pattern.
+        
+        Args:
+            pattern: Regular expression pattern
+            flags: Regex flags (e.g., re.IGNORECASE)
+            context_length: Characters to show around match
+            max_results: Maximum number of results to return
+            
+        Returns:
+            List of search results with matches and context
+        """
+        import time
+        
+        # Update index if it's stale
+        if self._index_timestamp is None or (time.time() - self._index_timestamp) > 60:
+            await self._update_search_index()
+        
+        # Compile regex pattern
+        try:
+            regex = re.compile(pattern, flags)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+        
+        results = []
+        
+        # Search through indexed content
+        for rel_path, file_data in self._search_index.items():
+            content = file_data['original_content']
+            
+            # Find all matches with their positions
+            matches = list(regex.finditer(content))
+            
+            if matches:
+                # Get line numbers for better context
+                lines = content.split('\n')
+                line_starts = [0]
+                for line in lines[:-1]:
+                    line_starts.append(line_starts[-1] + len(line) + 1)
+                
+                # Extract contexts for matches
+                match_contexts = []
+                for match in matches[:5]:  # Limit to first 5 matches per file
+                    match_start = match.start()
+                    match_end = match.end()
+                    
+                    # Find line number
+                    line_num = 0
+                    for i, start in enumerate(line_starts):
+                        if start > match_start:
+                            line_num = i
+                            break
+                    else:
+                        line_num = len(lines)
+                    
+                    # Extract context
+                    context_start = max(0, match_start - context_length // 2)
+                    context_end = min(len(content), match_end + context_length // 2)
+                    context = content[context_start:context_end].strip()
+                    
+                    # Add ellipsis if truncated
+                    if context_start > 0:
+                        context = "..." + context
+                    if context_end < len(content):
+                        context = context + "..."
+                    
+                    match_contexts.append({
+                        "match": match.group(0),
+                        "line": line_num,
+                        "context": context,
+                        "groups": match.groups() if match.groups() else None
+                    })
+                
+                results.append({
+                    "path": rel_path,
+                    "match_count": len(matches),
+                    "matches": match_contexts,
+                    "score": min(len(matches) / 5.0 + 1.0, 5.0)  # Score based on match count
+                })
+                
+                # Stop if we have enough results
+                if len(results) >= max_results:
+                    break
+        
+        # Sort by score (descending)
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:max_results]
+    
     async def list_notes(self, directory: Optional[str] = None, recursive: bool = True) -> List[Dict[str, str]]:
         """
         List all notes in vault or specific directory.
