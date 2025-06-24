@@ -100,10 +100,6 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
    Then: Open Windsurf Settings → Advanced Settings → Cascade → Add Server → Refresh
    </details>
 
-   Replace `your-api-key-here` with the API key you copied from Obsidian.
-   
-   > **Using HTTPS or custom port?** Add `"OBSIDIAN_API_URL": "https://localhost:27124"` to the env section. See [Advanced Configuration](#advanced-configuration) for details.
-
 3. **Restart your AI tool** to load the new configuration.
 
 That's it! The server will now be available in your AI tool with access to your Obsidian vault.
@@ -143,16 +139,14 @@ Here are some example prompts to get started:
    pip install -r requirements.txt
    ```
 
-4. **Set up Obsidian Local REST API:**
-   - Install the Local REST API plugin in Obsidian
-   - Enable the plugin in Obsidian settings
-   - Copy the API key from the plugin settings
-   - Note the port number (default: 27123 for HTTP, 27124 for HTTPS)
-
-5. **Configure environment variables:**
+4. **Configure environment variables:**
    ```bash
-   export OBSIDIAN_REST_API_KEY="your-api-key-here"
-   # export OBSIDIAN_API_URL="https://localhost:27124"  # Optional: only if using HTTPS
+   export OBSIDIAN_VAULT_PATH="/path/to/your/obsidian/vault"
+   ```
+
+5. **Run the server:**
+   ```bash
+   python -m obsidian_mcp.server
    ```
 
 6. **Add to Claude Desktop (for development):**
@@ -166,7 +160,7 @@ Here are some example prompts to get started:
      "mcpServers": {
        "obsidian": {
          "command": "/path/to/python",
-         "args": ["-m", "src.server"],
+         "args": ["-m", "obsidian_mcp.server"],
          "cwd": "/path/to/obsidian-mcp",
          "env": {
            "PYTHONPATH": "/path/to/obsidian-mcp",
@@ -181,7 +175,7 @@ Here are some example prompts to get started:
 
 ```
 obsidian-mcp/
-├── src/
+├── obsidian_mcp/
 │   ├── server.py           # Main entry point with rich parameter schemas
 │   ├── tools/              # Tool implementations
 │   │   ├── note_management.py    # CRUD operations
@@ -194,14 +188,10 @@ obsidian-mcp/
 │   │   ├── filesystem.py        # Direct filesystem access
 │   │   ├── validators.py        # Path validation, sanitization
 │   │   └── validation.py        # Comprehensive parameter validation
-│   └── constants.py       # API endpoints, defaults, enhanced error messages
+│   └── constants.py       # Constants and error messages
 ├── tests/
-│   ├── run_tests.py       # Smart test runner
-│   ├── test_unit.py       # Unit tests with mocks
-│   ├── test_integration.py # Integration tests
-│   ├── test_live.py       # Live API tests
-│   ├── test_comprehensive.py # Full workflow validation
-│   └── test_data_validation.py # Return value testing
+│   ├── run_tests.py       # Test runner
+│   └── test_filesystem_integration.py # Integration tests
 ├── docs/                  # Additional documentation
 ├── requirements.txt       # Python dependencies
 ├── CLAUDE.md             # Instructions for Claude Code
@@ -582,23 +572,22 @@ Find all broken links in the vault, a specific directory, or a single note.
 # Run all tests
 python tests/run_tests.py
 
-# Run specific test types
-python tests/run_tests.py unit         # Unit tests (requires pytest)
-python tests/run_tests.py integration  # Integration tests (requires pytest)  
-python tests/run_tests.py live         # Live tests with real Obsidian
-
-# Run individual test files
-python tests/test_comprehensive.py     # Full workflow test
-python tests/test_data_validation.py   # Data structure validation
+# Or with pytest directly
+pytest tests/
 ```
+
+Tests create temporary vaults for isolation and don't require a running Obsidian instance.
 
 ### Testing with MCP Inspector
 
-1. **Ensure Obsidian is running** with the Local REST API plugin enabled
+1. **Set your vault path:**
+   ```bash
+   export OBSIDIAN_VAULT_PATH="/path/to/your/vault"
+   ```
 
 2. **Run the MCP Inspector:**
    ```bash
-   npx @modelcontextprotocol/inspector python -m src.server
+   npx @modelcontextprotocol/inspector python -m obsidian_mcp.server
    ```
 
 3. **Open the Inspector UI** at `http://localhost:5173`
@@ -640,27 +629,26 @@ Use 'created' to find notes by creation date, 'modified' for last edit date
 
 ## Troubleshooting
 
-### "Connection refused" error
-- Ensure Obsidian is running
-- Verify the Local REST API plugin is enabled
-- Check that the port matches (default: 27123 for HTTP, 27124 for HTTPS)
-- Confirm the API key is correct
-- The enhanced error will show the exact URL and port being used
+### "Vault not found" error
+- Ensure the OBSIDIAN_VAULT_PATH environment variable is set correctly
+- Verify the path points to an existing Obsidian vault directory
+- Check that you have read/write permissions for the vault directory
 
 ### Tags not showing up
 - Ensure tags are properly formatted (with or without # prefix)
-- Check that the Local REST API plugin is up to date
 - Tags in frontmatter should be in YAML array format: `tags: [tag1, tag2]`
 - Inline tags should use the # prefix: `#project #urgent`
+- Tags inside code blocks are automatically excluded
 
-### "Certificate verify failed" error
-- This is expected with the Local REST API's self-signed certificate
-- The server handles this automatically
+### "File too large" error
+- The server has a 10MB limit for note files and 50MB for images
+- This prevents memory issues with very large files
+- Consider splitting large notes into smaller ones
 
 ### "Module not found" error
 - Ensure your virtual environment is activated
-- Run from the project root: `python -m src.server`
-- Verify PYTHONPATH includes the project directory
+- Run from the project root: `python -m obsidian_mcp.server`
+- Verify all dependencies are installed: `pip install -r requirements.txt`
 
 ### Empty results when listing notes
 - Specify a directory when using `list_notes` (e.g., "Daily", "Projects")
@@ -703,10 +691,11 @@ Use 'created' to find notes by creation date, 'modified' for last edit date
 
 ## Security Considerations
 
-- **Keep your API key secret** - never commit it to version control
+- **Vault path access** - The server only accesses the specified vault directory
 - The server validates all paths to prevent directory traversal attacks
-- Communication with Obsidian uses HTTP by default (localhost only) or HTTPS with self-signed certificate
-- The server only accepts local connections through the REST API
+- File operations are restricted to the vault directory
+- Large files are rejected to prevent memory exhaustion
+- Path validation prevents access to system files
 
 ## Development
 
@@ -819,31 +808,22 @@ obsidian-mcp
 
 ## Configuration
 
-### Advanced Configuration
+### Performance Notes
 
-If you're using a non-standard setup, you can customize the server behavior with these environment variables:
+- **Search indexing** - The server builds an in-memory search index that refreshes every 60 seconds
+- **Concurrent operations** - File operations use async I/O for better performance
+- **Large vaults** - Batch operations automatically adjust size based on vault size
+- **Image handling** - Images are base64 encoded which uses more memory
 
-- `OBSIDIAN_API_URL` - Override the default API endpoint (default: `http://127.0.0.1:27123`)
-  - Use this if you're running the HTTPS endpoint (e.g., `https://localhost:27124`)
-  - Or if you've changed the port number in the Local REST API plugin settings
-  - The HTTP endpoint is used by default for easier setup
-  - Note: Trailing slashes are handled automatically (both `http://127.0.0.1:27123` and `http://127.0.0.1:27123/` work)
+### Migration from REST API Version
 
-Example for HTTPS or non-standard configurations:
-```json
-{
-  "mcpServers": {
-    "obsidian": {
-      "command": "uvx",
-      "args": ["obsidian-mcp"],
-      "env": {
-        "OBSIDIAN_REST_API_KEY": "your-api-key-here",
-        "OBSIDIAN_API_URL": "https://localhost:27124"
-      }
-    }
-  }
-}
-```
+If you were using a previous version that required the Local REST API plugin:
+
+1. **You no longer need the Obsidian Local REST API plugin** - This server now uses direct filesystem access
+2. Replace `OBSIDIAN_REST_API_KEY` with `OBSIDIAN_VAULT_PATH` in your configuration
+3. Remove any `OBSIDIAN_API_URL` settings
+4. The new version is significantly faster and more reliable
+5. All features work offline without requiring Obsidian to be running
 
 ## Contributing
 
@@ -863,5 +843,5 @@ MIT License - see LICENSE file for details
 
 - [Anthropic](https://anthropic.com) for creating the Model Context Protocol
 - [Obsidian](https://obsidian.md) team for the amazing note-taking app
-- [coddingtonbear](https://github.com/coddingtonbear) for the Local REST API plugin
+- [coddingtonbear](https://github.com/coddingtonbear) for the original Local REST API plugin (no longer required)
 - [dsp-ant](https://github.com/dsp-ant) for the FastMCP framework
