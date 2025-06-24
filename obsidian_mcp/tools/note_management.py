@@ -13,7 +13,6 @@ from ..constants import ERROR_MESSAGES
 
 async def read_note(
     path: str, 
-    include_images: bool = False,
     ctx: Optional[Context] = None
 ) -> dict:
     """
@@ -21,18 +20,18 @@ async def read_note(
     
     Use this tool when you need to retrieve the full content of a note
     from the Obsidian vault. The path should be relative to the vault root.
-    Can optionally include embedded images as base64-encoded data.
+    
+    To view images embedded in a note, use the view_note_images tool.
     
     Args:
         path: Path to the note relative to vault root (e.g., "Daily/2024-01-15.md")
-        include_images: Whether to load and include embedded images (default: false)
         ctx: MCP context for progress reporting
         
     Returns:
-        Dictionary containing the note content and metadata, optionally with embedded images
+        Dictionary containing the note content and metadata
         
     Example:
-        >>> await read_note("Projects/My Project.md", include_images=True, ctx=ctx)
+        >>> await read_note("Projects/My Project.md", ctx=ctx)
         {
             "path": "Projects/My Project.md",
             "content": "# My Project\n\n![diagram](attachments/diagram.png)\n\nProject details...",
@@ -40,14 +39,7 @@ async def read_note(
                 "tags": ["project", "active"],
                 "created": "2024-01-15T10:00:00Z",
                 "modified": "2024-01-15T14:30:00Z"
-            },
-            "images": [
-                {
-                    "path": "attachments/diagram.png",
-                    "content": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-                    "mime_type": "image/png"
-                }
-            ]
+            }
         }
     """
     # Validate path
@@ -67,19 +59,11 @@ async def read_note(
     except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
     
-    result = {
+    return {
         "path": note.path,
         "content": note.content,
         "metadata": note.metadata.model_dump(exclude_none=True)
     }
-    
-    # If requested, find and load embedded images
-    if include_images:
-        images = await _extract_and_load_images(note.content, vault, ctx)
-        if images:
-            result["images"] = images
-    
-    return result
 
 
 async def _search_and_load_image(

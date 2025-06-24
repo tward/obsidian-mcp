@@ -31,6 +31,9 @@ from .link_management import (
 from .image_management import (
     read_image,
 )
+from .view_note_images import (
+    view_note_images,
+)
 
 __all__ = [
     # Note management
@@ -59,4 +62,5 @@ __all__ = [
     "find_broken_links",
     # Image management
     "read_image",
+    "view_note_images",
 ]
