@@ -7,9 +7,11 @@ import asyncio
 import aiofiles
 import yaml
 import base64
+import io
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
+from PIL import Image
 from ..models import Note, NoteMetadata
 
 
@@ -436,12 +438,13 @@ class ObsidianVault:
         
         return None
     
-    async def read_image(self, path: str) -> Dict[str, Any]:
+    async def read_image(self, path: str, max_width: int = 800) -> Dict[str, Any]:
         """
-        Read an image file from the vault.
+        Read an image file from the vault with automatic resizing.
         
         Args:
             path: Path to image relative to vault root
+            max_width: Maximum width for resizing (default: 800px)
             
         Returns:
             Dictionary with image data and metadata
@@ -461,9 +464,6 @@ class ObsidianVault:
         async with aiofiles.open(full_path, 'rb') as f:
             content = await f.read()
         
-        # Encode to base64
-        base64_content = base64.b64encode(content).decode('utf-8')
-        
         # Determine MIME type
         ext = full_path.suffix.lower()
         mime_types = {
@@ -478,12 +478,88 @@ class ObsidianVault:
         }
         mime_type = mime_types.get(ext, 'application/octet-stream')
         
-        return {
-            "path": path,
-            "content": base64_content,
-            "mime_type": mime_type,
-            "size": len(content)
-        }
+        # Skip resizing for SVG images (vector graphics)
+        if ext == '.svg':
+            base64_content = base64.b64encode(content).decode('utf-8')
+            return {
+                "path": path,
+                "content": base64_content,
+                "mime_type": mime_type,
+                "size": len(content),
+                "original_size": len(content)
+            }
+        
+        # Resize image if needed
+        try:
+            # Open image with PIL
+            img = Image.open(io.BytesIO(content))
+            original_width, original_height = img.size
+            
+            # Only resize if image is larger than max_width
+            if original_width > max_width:
+                # Calculate new height maintaining aspect ratio
+                aspect_ratio = original_height / original_width
+                new_height = int(max_width * aspect_ratio)
+                
+                # Resize image
+                img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+                
+                # Save to bytes
+                output = io.BytesIO()
+                # Use appropriate format based on original
+                if ext in ['.jpg', '.jpeg']:
+                    img.save(output, format='JPEG', quality=85, optimize=True)
+                elif ext == '.png':
+                    img.save(output, format='PNG', optimize=True)
+                elif ext == '.webp':
+                    img.save(output, format='WEBP', quality=85)
+                else:
+                    # For other formats, convert to PNG
+                    img.save(output, format='PNG', optimize=True)
+                    mime_type = 'image/png'
+                
+                resized_content = output.getvalue()
+                base64_content = base64.b64encode(resized_content).decode('utf-8')
+                
+                return {
+                    "path": path,
+                    "content": base64_content,
+                    "mime_type": mime_type,
+                    "size": len(resized_content),
+                    "original_size": len(content),
+                    "resized": True,
+                    "dimensions": {
+                        "original": {"width": original_width, "height": original_height},
+                        "resized": {"width": max_width, "height": new_height}
+                    }
+                }
+            else:
+                # Image is already small enough, return as-is
+                base64_content = base64.b64encode(content).decode('utf-8')
+                return {
+                    "path": path,
+                    "content": base64_content,
+                    "mime_type": mime_type,
+                    "size": len(content),
+                    "original_size": len(content),
+                    "resized": False,
+                    "dimensions": {
+                        "original": {"width": original_width, "height": original_height}
+                    }
+                }
+        except Exception as e:
+            # If image processing fails, return original (but this might be too large)
+            # Log the error for debugging
+            print(f"Warning: Failed to process image {path}: {e}")
+            base64_content = base64.b64encode(content).decode('utf-8')
+            return {
+                "path": path,
+                "content": base64_content,
+                "mime_type": mime_type,
+                "size": len(content),
+                "original_size": len(content),
+                "error": str(e)
+            }
 
 
 # Global vault instance (will be initialized in server.py)

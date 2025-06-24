@@ -102,9 +102,9 @@ async def _search_and_load_image(
         if ctx:
             ctx.info(f"Loading embedded image: {image_ref}")
         
-        # Try to read the image directly
+        # Try to read the image directly (with resizing for embedded images)
         try:
-            image_data = await vault.read_image(image_ref)
+            image_data = await vault.read_image(image_ref, max_width=800)
         except FileNotFoundError:
             # If not found at direct path, search for it
             if ctx:
@@ -118,7 +118,7 @@ async def _search_and_load_image(
             if found_path:
                 if ctx:
                     ctx.info(f"Found image at: {found_path}")
-                image_data = await vault.read_image(found_path)
+                image_data = await vault.read_image(found_path, max_width=800)
             else:
                 image_data = None
         
