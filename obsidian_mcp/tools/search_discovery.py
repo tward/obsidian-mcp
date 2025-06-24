@@ -108,30 +108,35 @@ async def search_notes(
     Search for notes containing specific text or matching search criteria.
     
     Use this tool to find notes by content, title, or metadata. Supports
-    Obsidian's search syntax including tags, paths, and content matching.
+    multiple search modes with special prefixes:
+    
+    Search Syntax:
+    - Content search (default): Just type your query to search within note content
+      Example: "machine learning" finds notes containing this text
+    - Path/Title search: Use "path:" prefix to search by filename or folder
+      Example: "path:Daily/" finds all notes in Daily folder
+      Example: "path:Note with Images" finds notes with this in their filename
+    - Tag search: Use "tag:" prefix to search by tags
+      Example: "tag:project" or "tag:#project" finds notes with the project tag
+    - Combined searches are supported but limited to one mode at a time
     
     Args:
-        query: Search query (supports Obsidian search syntax)
+        query: Search query with optional prefix (path:, tag:, or plain text)
         context_length: Number of characters to show around matches (default: 100)
         ctx: MCP context for progress reporting
         
     Returns:
         Dictionary containing search results with matched notes and context
         
-    Example:
-        >>> await search_notes("tag:#project AND Machine Learning", ctx=ctx)
-        {
-            "query": "tag:#project AND Machine Learning",
-            "count": 3,
-            "results": [
-                {
-                    "path": "Projects/ML Pipeline.md",
-                    "score": 0.95,
-                    "matches": ["implementing machine learning models"],
-                    "context": "...focused on implementing machine learning models for production..."
-                }
-            ]
-        }
+    Examples:
+        >>> # Search by content
+        >>> await search_notes("machine learning algorithms", ctx=ctx)
+        
+        >>> # Search by filename/path
+        >>> await search_notes("path:Project Notes", ctx=ctx)
+        
+        >>> # Search by tag
+        >>> await search_notes("tag:important", ctx=ctx)
     """
     # Validate parameters
     is_valid, error = validate_search_query(query)
