@@ -196,21 +196,33 @@ This content has been updated.
     @pytest.mark.asyncio
     async def test_read_image(self, test_vault):
         """Test reading an image."""
+        # Test without metadata - returns Image object
         result = await read_image("images/test_image.png")
+        from fastmcp import Image
+        assert isinstance(result, Image)
         
-        assert result["path"] == "images/test_image.png"
-        assert result["mime_type"] == "image/png"
-        assert "content" in result  # Base64 encoded
+        # Test with metadata - returns dict
+        result_with_metadata = await read_image("images/test_image.png", include_metadata=True)
+        assert isinstance(result_with_metadata, dict)
+        assert isinstance(result_with_metadata["image"], Image)
+        assert result_with_metadata["path"] == "images/test_image.png"
+        assert result_with_metadata["mime_type"] == "image/png"
     
     @pytest.mark.asyncio
     async def test_read_note_with_images(self, test_vault):
         """Test reading a note with embedded images."""
-        result = await read_note("images/test_image.md", include_images=True)
+        # Read the note without images
+        note_result = await read_note("images/test_image.md")
+        assert "path" in note_result
+        assert note_result["path"] == "images/test_image.md"
         
-        assert "images" in result
-        assert len(result["images"]) > 0
-        assert result["images"][0]["path"] == "images/test_image.png"
-        assert result["images"][0]["mime_type"] == "image/png"
+        # Use view_note_images to get the images
+        from obsidian_mcp.tools import view_note_images
+        images = await view_note_images("images/test_image.md")
+        
+        from fastmcp import Image
+        assert len(images) > 0
+        assert all(isinstance(img, Image) for img in images)
     
     @pytest.mark.asyncio
     async def test_performance_search(self, test_vault):

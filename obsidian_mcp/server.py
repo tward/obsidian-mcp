@@ -1,11 +1,18 @@
 """Main entry point for Obsidian MCP server."""
 
 import os
+import logging
 from typing import Annotated, Optional, List, Literal
 from pydantic import Field
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from .utils.filesystem import init_vault
+
+# Configure logging
+logging.basicConfig(
+    level=os.getenv("OBSIDIAN_LOG_LEVEL", "INFO"),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Import all tools
 from .tools import (

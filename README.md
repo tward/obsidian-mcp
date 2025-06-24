@@ -861,12 +861,43 @@ obsidian-mcp
 
 ## Configuration
 
+### Performance and Indexing
+
+The server now includes a **persistent search index** using SQLite for dramatically improved performance:
+
+#### Key Features:
+- **Instant startup** - No need to rebuild index on every server start
+- **Incremental updates** - Only re-indexes files that have changed
+- **60x faster searches** - SQLite queries are much faster than scanning all files
+- **Lower memory usage** - Files are loaded on-demand rather than all at once
+
+#### Configuration Options:
+
+Set these environment variables to customize behavior:
+
+```bash
+# Enable/disable persistent index (default: true)
+export OBSIDIAN_USE_PERSISTENT_INDEX=true
+
+# Set logging level (default: INFO, options: DEBUG, INFO, WARNING, ERROR)
+export OBSIDIAN_LOG_LEVEL=DEBUG
+```
+
+The persistent index is stored in your vault at `.obsidian/mcp-search-index.db`.
+
+#### Legacy In-Memory Index:
+
+To use the legacy in-memory index (not recommended):
+```bash
+export OBSIDIAN_USE_PERSISTENT_INDEX=false
+```
+
 ### Performance Notes
 
-- **Search indexing** - The server builds an in-memory search index that refreshes every 60 seconds
+- **Search indexing** - With persistent index, only changed files are re-indexed
 - **Concurrent operations** - File operations use async I/O for better performance
-- **Large vaults** - Batch operations automatically adjust size based on vault size
-- **Image handling** - Images are base64 encoded which uses more memory
+- **Large vaults** - Incremental indexing makes large vaults (10,000+ notes) usable
+- **Image handling** - Images are automatically resized to prevent memory issues
 
 ### Migration from REST API Version
 

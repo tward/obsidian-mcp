@@ -8,22 +8,27 @@ import aiofiles
 import yaml
 import base64
 import io
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 from PIL import Image
 from ..models import Note, NoteMetadata
+from .persistent_index import PersistentSearchIndex
+
+logger = logging.getLogger(__name__)
 
 
 class ObsidianVault:
     """Direct filesystem access to Obsidian vault."""
     
-    def __init__(self, vault_path: Optional[str] = None):
+    def __init__(self, vault_path: Optional[str] = None, use_persistent_index: bool = True):
         """
         Initialize vault access.
         
         Args:
             vault_path: Path to vault. If not provided, uses OBSIDIAN_VAULT_PATH env var.
+            use_persistent_index: Whether to use persistent SQLite index (default: True)
         """
         self.vault_path = Path(vault_path or os.getenv("OBSIDIAN_VAULT_PATH", ""))
         
@@ -39,10 +44,17 @@ class ObsidianVault:
         if not self.vault_path.is_dir():
             raise ValueError(f"Vault path is not a directory: {self.vault_path}")
         
-        # Initialize search index cache
+        # Initialize search index (persistent or in-memory)
+        self.use_persistent_index = use_persistent_index
+        self.persistent_index: Optional[PersistentSearchIndex] = None
+        
+        # Keep in-memory cache for backward compatibility and fast access
         self._search_index: Dict[str, Dict[str, Any]] = {}
         self._index_timestamp: Optional[float] = None
         self._index_lock = asyncio.Lock()
+        
+        # Track if persistent index has been initialized
+        self._persistent_index_initialized = False
     
     def _ensure_safe_path(self, path: str) -> Path:
         """
@@ -277,37 +289,152 @@ class ObsidianVault:
         full_path.unlink()
         return True
     
+    async def _initialize_persistent_index(self) -> None:
+        """Initialize the persistent search index if not already done."""
+        if not self._persistent_index_initialized and self.use_persistent_index:
+            try:
+                self.persistent_index = PersistentSearchIndex(self.vault_path)
+                await self.persistent_index.initialize()
+                self._persistent_index_initialized = True
+                logger.info("Persistent search index initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize persistent index: {e}")
+                logger.info("Falling back to in-memory index")
+                self.use_persistent_index = False
+                self.persistent_index = None
+
     async def _update_search_index(self) -> None:
         """Update the search index with current vault content."""
         import time
         
+        # Initialize persistent index if needed
+        if self.use_persistent_index and not self._persistent_index_initialized:
+            await self._initialize_persistent_index()
+        
         async with self._index_lock:
-            # Clear existing index
-            self._search_index.clear()
+            if self.use_persistent_index and self.persistent_index:
+                # Use persistent index with incremental updates
+                await self._update_persistent_index()
+            else:
+                # Fall back to in-memory index
+                await self._update_memory_index()
             
-            # Index all markdown files
-            for md_file in self.vault_path.rglob("*.md"):
-                try:
-                    # Get file stats
-                    stat = md_file.stat()
-                    rel_path = str(md_file.relative_to(self.vault_path))
-                    
+            self._index_timestamp = time.time()
+    
+    async def _update_memory_index(self) -> None:
+        """Update the in-memory search index (legacy method)."""
+        # Clear existing index
+        self._search_index.clear()
+        
+        # Index all markdown files
+        for md_file in self.vault_path.rglob("*.md"):
+            try:
+                # Get file stats
+                stat = md_file.stat()
+                rel_path = str(md_file.relative_to(self.vault_path))
+                
+                # Read content
+                async with aiofiles.open(md_file, 'r', encoding='utf-8') as f:
+                    content = await f.read()
+                
+                # Store in index
+                self._search_index[rel_path] = {
+                    'content': content.lower(),  # Store lowercase for searching
+                    'original_content': content,
+                    'mtime': stat.st_mtime,
+                    'size': stat.st_size
+                }
+            except Exception:
+                # Skip files we can't read
+                continue
+    
+    async def _update_persistent_index(self) -> None:
+        """Update the persistent search index with incremental updates."""
+        existing_files = set()
+        
+        # Process all markdown files
+        for md_file in self.vault_path.rglob("*.md"):
+            try:
+                # Get file stats
+                stat = md_file.stat()
+                rel_path = str(md_file.relative_to(self.vault_path))
+                existing_files.add(rel_path)
+                
+                # Check if file needs updating
+                if await self.persistent_index.needs_update(rel_path, stat.st_mtime, stat.st_size):
                     # Read content
                     async with aiofiles.open(md_file, 'r', encoding='utf-8') as f:
                         content = await f.read()
                     
-                    # Store in index
+                    # Extract metadata
+                    metadata = self._extract_file_metadata(content)
+                    
+                    # Index the file
+                    await self.persistent_index.index_file(
+                        rel_path, content, stat.st_mtime, stat.st_size, metadata
+                    )
+                    
+                    logger.debug(f"Indexed: {rel_path}")
+                    
+                    # Also update memory cache for fast access
                     self._search_index[rel_path] = {
-                        'content': content.lower(),  # Store lowercase for searching
+                        'content': content.lower(),
                         'original_content': content,
                         'mtime': stat.st_mtime,
                         'size': stat.st_size
                     }
-                except Exception:
-                    # Skip files we can't read
-                    continue
-            
-            self._index_timestamp = time.time()
+            except Exception as e:
+                logger.error(f"Failed to index {md_file}: {e}")
+                continue
+        
+        # Remove orphaned entries
+        await self.persistent_index.clear_orphaned_entries(existing_files)
+    
+    def _extract_file_metadata(self, content: str) -> Dict[str, Any]:
+        """Extract metadata from file content (tags, frontmatter, etc.)."""
+        metadata = {}
+        
+        # Extract frontmatter
+        if content.startswith('---\n'):
+            try:
+                end_index = content.find('\n---\n', 4)
+                if end_index > 0:
+                    frontmatter_text = content[4:end_index]
+                    frontmatter = yaml.safe_load(frontmatter_text) or {}
+                    # Convert dates and other non-serializable objects to strings
+                    metadata['frontmatter'] = self._serialize_metadata(frontmatter)
+            except:
+                pass
+        
+        # Extract tags
+        tags = set()
+        # Frontmatter tags
+        if 'frontmatter' in metadata and 'tags' in metadata['frontmatter']:
+            fm_tags = metadata['frontmatter']['tags']
+            if isinstance(fm_tags, list):
+                tags.update(fm_tags)
+            elif isinstance(fm_tags, str):
+                tags.add(fm_tags)
+        
+        # Inline tags
+        tag_pattern = r'#([a-zA-Z0-9_\-/]+)'
+        for match in re.finditer(tag_pattern, content):
+            tags.add(match.group(1))
+        
+        metadata['tags'] = list(tags)
+        
+        return metadata
+    
+    def _serialize_metadata(self, obj: Any) -> Any:
+        """Convert non-serializable objects to JSON-serializable format."""
+        if isinstance(obj, (datetime, type(datetime.now().date()))):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {k: self._serialize_metadata(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._serialize_metadata(v) for v in obj]
+        else:
+            return obj
     
     async def search_notes(self, query: str, context_length: int = 100, max_results: int = 50) -> List[Dict[str, Any]]:
         """
@@ -323,10 +450,74 @@ class ObsidianVault:
         """
         import time
         
+        # Initialize persistent index if needed (but not initialized)
+        if self.use_persistent_index and not self._persistent_index_initialized:
+            await self._initialize_persistent_index()
+        
         # Update index if it's stale (older than 60 seconds)
         if self._index_timestamp is None or (time.time() - self._index_timestamp) > 60:
             await self._update_search_index()
         
+        # Use persistent index if available
+        if self.use_persistent_index and self.persistent_index:
+            return await self._search_with_persistent_index(query, context_length, max_results)
+        else:
+            return await self._search_with_memory_index(query, context_length, max_results)
+    
+    async def _search_with_persistent_index(self, query: str, context_length: int, max_results: int) -> List[Dict[str, Any]]:
+        """Search using the persistent SQLite index."""
+        # Use simple search for now (FTS5 search can be added later)
+        search_results = await self.persistent_index.search_simple(query, max_results)
+        
+        results = []
+        query_lower = query.lower()
+        
+        for file_info in search_results:
+            content = file_info['content']
+            content_lower = content.lower()
+            
+            # Find all matches
+            matches = []
+            start_pos = 0
+            while True:
+                match_pos = content_lower.find(query_lower, start_pos)
+                if match_pos == -1:
+                    break
+                matches.append(match_pos)
+                start_pos = match_pos + 1
+            
+            # Extract context for first match
+            if matches:
+                first_match = matches[0]
+                
+                # Calculate context bounds
+                start = max(0, first_match - context_length // 2)
+                end = min(len(content), first_match + len(query) + context_length // 2)
+                context = content[start:end].strip()
+                
+                # Add ellipsis if truncated
+                if start > 0:
+                    context = "..." + context
+                if end < len(content):
+                    context = context + "..."
+                
+                # Calculate simple relevance score based on match count
+                score = min(len(matches) / 10.0 + 1.0, 5.0)  # Score between 1 and 5
+                
+                results.append({
+                    "path": file_info['filepath'],
+                    "score": score,
+                    "matches": [query],
+                    "match_count": len(matches),
+                    "context": context
+                })
+        
+        # Sort by score (descending)
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results
+    
+    async def _search_with_memory_index(self, query: str, context_length: int, max_results: int) -> List[Dict[str, Any]]:
+        """Search using the in-memory index (legacy method)."""
         results = []
         query_lower = query.lower()
         
@@ -349,6 +540,8 @@ class ObsidianVault:
                 # Extract context for first match
                 if matches:
                     first_match = matches[0]
+                    
+                    # Calculate context bounds
                     start = max(0, first_match - context_length // 2)
                     end = min(len(content), first_match + len(query) + context_length // 2)
                     context = content[start:end].strip()
@@ -649,6 +842,13 @@ class ObsidianVault:
                 "original_size": len(content),
                 "error": str(e)
             }
+    
+    async def close(self):
+        """Close any open resources (like database connections)."""
+        if self.persistent_index:
+            await self.persistent_index.close()
+            self.persistent_index = None
+            self._persistent_index_initialized = False
 
 
 # Global vault instance (will be initialized in server.py)
@@ -662,8 +862,20 @@ def get_vault() -> ObsidianVault:
     return vault
 
 
-def init_vault(vault_path: Optional[str] = None) -> ObsidianVault:
-    """Initialize the global vault instance."""
+def init_vault(vault_path: Optional[str] = None, use_persistent_index: Optional[bool] = None) -> ObsidianVault:
+    """
+    Initialize the global vault instance.
+    
+    Args:
+        vault_path: Path to vault (uses OBSIDIAN_VAULT_PATH env var if not provided)
+        use_persistent_index: Whether to use persistent index (uses OBSIDIAN_USE_PERSISTENT_INDEX env var if not provided)
+    """
     global vault
-    vault = ObsidianVault(vault_path)
+    
+    # Check environment variable for persistent index preference
+    if use_persistent_index is None:
+        env_value = os.getenv("OBSIDIAN_USE_PERSISTENT_INDEX", "true").lower()
+        use_persistent_index = env_value in ("true", "1", "yes", "on")
+    
+    vault = ObsidianVault(vault_path, use_persistent_index=use_persistent_index)
     return vault
