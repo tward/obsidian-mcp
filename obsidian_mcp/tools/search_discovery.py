@@ -485,22 +485,44 @@ async def search_by_regex(
     """
     Search for notes using regular expressions for advanced pattern matching.
     
-    Use this tool when you need to find specific patterns in your notes, especially
-    useful for finding code snippets, structured data, or complex text patterns.
-    Regular expressions provide powerful pattern matching capabilities.
+    Use this tool instead of search_notes when you need to find:
+    - Code patterns (function definitions, imports, specific syntax)
+    - Structured data with specific formats
+    - Complex patterns that simple text search can't handle
+    - Text with wildcards or variable parts
+    
+    When to use regex search vs regular search:
+    - Use search_notes for: Simple text, note titles (with path:), tags
+    - Use search_by_regex for: Code patterns, formatted data, complex matching
     
     Args:
         pattern: Regular expression pattern to search for
         flags: List of regex flags to apply (optional). Supported flags:
                - "ignorecase" or "i": Case-insensitive matching
-               - "multiline" or "m": ^ and $ match line boundaries
+               - "multiline" or "m": ^ and $ match line boundaries  
                - "dotall" or "s": . matches newlines
         context_length: Number of characters to show around matches (default: 100)
         max_results: Maximum number of results to return (default: 50)
         ctx: MCP context for progress reporting
         
     Returns:
-        Dictionary containing search results with matched patterns and context
+        Dictionary containing search results with matched patterns, line numbers, and context
+        
+    Common Use Cases:
+        # Find Python imports of a specific module
+        pattern: r"(import|from)\\s+fastmcp"
+        
+        # Find function definitions
+        pattern: r"def\\s+\\w+\\s*\\([^)]*\\):"
+        
+        # Find TODO/FIXME comments with context
+        pattern: r"(TODO|FIXME)\\s*:?\\s*(.+)"
+        
+        # Find URLs in notes
+        pattern: r"https?://[^\\s)>]+"
+        
+        # Find code blocks of specific language
+        pattern: r"```python([^`]+)```"
         
     Example:
         >>> # Find Python function definitions with 'search' in the name
@@ -516,18 +538,13 @@ async def search_by_regex(
                         {
                             "match": "def search_notes(query, limit):",
                             "line": 15,
-                            "context": "...async def search_notes(query, limit):\\n    '''Search through all notes'''..."
+                            "context": "...async def search_notes(query, limit):\\n    '''Search through all notes'''...",
+                            "groups": null
                         }
                     ]
                 }
             ]
         }
-        
-        >>> # Find TODO comments with priorities
-        >>> await search_by_regex(r"#\\s*TODO\\s*\\[(?P<priority>\\w+)\\].*", flags=["ignorecase"])
-        
-        >>> # Find markdown links
-        >>> await search_by_regex(r"\\[([^\\]]+)\\]\\(([^)]+)\\)")
     """
     # Validate regex pattern
     try:

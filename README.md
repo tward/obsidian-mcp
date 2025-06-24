@@ -303,6 +303,59 @@ Search for notes by creation or modification date.
 - "Find notes created in the last 30 days" → `search_by_date("created", 30, "within")`
 - "What notes were modified exactly 2 days ago?" → `search_by_date("modified", 2, "exactly")`
 
+#### `search_by_regex`
+Search for notes using regular expressions for advanced pattern matching.
+
+**Parameters:**
+- `pattern`: Regular expression pattern to search for
+- `flags` (optional): List of regex flags ("ignorecase", "multiline", "dotall")
+- `context_length` (default: `100`): Characters to show around matches
+- `max_results` (default: `50`): Maximum number of results
+
+**When to use:**
+- Finding code patterns (functions, imports, syntax)
+- Searching for structured data
+- Complex text patterns that simple search can't handle
+
+**Common patterns:**
+```python
+# Find Python imports
+"(import|from)\\s+fastmcp"
+
+# Find function definitions
+"def\\s+\\w+\\s*\\([^)]*\\):"
+
+# Find TODO comments
+"(TODO|FIXME)\\s*:?\\s*(.+)"
+
+# Find URLs
+"https?://[^\\s)>]+"
+
+# Find code blocks
+"```python([^`]+)```"
+```
+
+**Returns:**
+```json
+{
+  "pattern": "def\\s+search\\w*",
+  "count": 2,
+  "results": [
+    {
+      "path": "code/utils.py",
+      "match_count": 3,
+      "matches": [
+        {
+          "match": "def search_notes",
+          "line": 42,
+          "context": "...async def search_notes(query)..."
+        }
+      ]
+    }
+  ]
+}
+```
+
 #### `list_notes`
 List notes in your vault with optional recursive traversal.
 
