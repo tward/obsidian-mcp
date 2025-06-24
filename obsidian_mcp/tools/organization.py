@@ -762,33 +762,29 @@ async def list_tags(
         # Process notes in batches for better performance
         import asyncio
         
-        batch_size = 10  # Process 10 notes at a time
-        for i in range(0, len(all_notes), batch_size):
-            batch = all_notes[i:i + batch_size]
-            
-            # Create tasks for concurrent reading
-            tasks = [vault.read_note(note_info["path"]) for note_info in batch]
-            
-            # Wait for all tasks in this batch to complete
-            try:
-                notes = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # Process results
-                for note in notes:
-                    if isinstance(note, Exception):
-                        # Skip failed reads
-                        continue
-                        
-                    # Extract tags
+        # Adjust batch size based on vault size
+        batch_size = 50 if len(all_notes) > 1000 else 20
+        max_concurrent = asyncio.Semaphore(batch_size)
+        
+        async def process_note(note_info):
+            async with max_concurrent:
+                try:
+                    note = await vault.read_note(note_info["path"])
                     if note and note.metadata and note.metadata.tags:
-                        for tag in note.metadata.tags:
-                            # Tags are already normalized in our metadata parsing
-                            if tag:
-                                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            
-            except Exception:
-                # Skip this batch if there's an error
-                continue
+                        return note.metadata.tags
+                except Exception:
+                    return []
+                return []
+        
+        # Process all notes concurrently with semaphore limiting
+        tasks = [process_note(note_info) for note_info in all_notes]
+        results = await asyncio.gather(*tasks)
+        
+        # Count tags
+        for tags in results:
+            for tag in tags:
+                if tag:
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
         
         # Format results
         if include_counts:

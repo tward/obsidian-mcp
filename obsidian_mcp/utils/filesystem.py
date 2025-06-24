@@ -4,6 +4,9 @@ import os
 import re
 import json
 import asyncio
+import aiofiles
+import yaml
+import base64
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
@@ -33,6 +36,11 @@ class ObsidianVault:
         
         if not self.vault_path.is_dir():
             raise ValueError(f"Vault path is not a directory: {self.vault_path}")
+        
+        # Initialize search index cache
+        self._search_index: Dict[str, Dict[str, Any]] = {}
+        self._index_timestamp: Optional[float] = None
+        self._index_lock = asyncio.Lock()
     
     def _ensure_safe_path(self, path: str) -> Path:
         """
@@ -47,8 +55,20 @@ class ObsidianVault:
         Raises:
             ValueError: If path is unsafe
         """
+        # Normalize path separators for cross-platform compatibility
+        path = path.replace('\\', '/')
+        
         # Remove any leading/trailing slashes
         path = path.strip("/")
+        
+        # Validate path components
+        parts = path.split('/')
+        for part in parts:
+            if part in ('..', '.', '') or part.startswith('.'):
+                raise ValueError(f"Invalid path component: {part}")
+            # Check for invalid characters
+            if any(char in part for char in '<>:"|?*'):
+                raise ValueError(f"Invalid characters in path: {part}")
         
         # Convert to Path object
         full_path = self.vault_path / path
@@ -81,30 +101,31 @@ class ObsidianVault:
                 # Find the closing ---
                 end_index = content.find("\n---\n", 4)
                 if end_index != -1:
-                    # Extract frontmatter
+                    # Extract frontmatter text
                     fm_text = content[4:end_index]
-                    # Simple YAML parsing (could use yaml library for complex cases)
-                    for line in fm_text.split('\n'):
-                        if ':' in line:
-                            key, value = line.split(':', 1)
-                            key = key.strip()
-                            value = value.strip()
-                            
-                            # Handle lists
-                            if value.startswith('[') and value.endswith(']'):
-                                value = [v.strip().strip('"\'') for v in value[1:-1].split(',')]
-                            # Handle quoted strings
-                            elif value.startswith('"') and value.endswith('"'):
-                                value = value[1:-1]
-                            elif value.startswith("'") and value.endswith("'"):
-                                value = value[1:-1]
-                            
-                            frontmatter[key] = value
+                    
+                    # Parse YAML properly
+                    try:
+                        frontmatter = yaml.safe_load(fm_text) or {}
+                        # Ensure it's a dict
+                        if not isinstance(frontmatter, dict):
+                            frontmatter = {}
+                    except yaml.YAMLError:
+                        # Fall back to simple parsing for invalid YAML
+                        frontmatter = {}
+                        for line in fm_text.split('\n'):
+                            if ':' in line and not line.strip().startswith('#'):
+                                key, value = line.split(':', 1)
+                                key = key.strip()
+                                value = value.strip()
+                                if value:
+                                    frontmatter[key] = value
                     
                     # Remove frontmatter from content
                     clean_content = content[end_index + 4:].lstrip()
-            except Exception:
+            except Exception as e:
                 # If parsing fails, just return original content
+                # Log the error for debugging
                 pass
         
         return frontmatter, clean_content
@@ -133,8 +154,15 @@ class ObsidianVault:
             if isinstance(tag, str):
                 tags.add(tag.lstrip('#'))
         
-        # Find inline tags in content
-        inline_tags = re.findall(r'#([a-zA-Z0-9_\-/]+)', content)
+        # Remove code blocks from content before extracting tags
+        # Remove fenced code blocks
+        clean_content = re.sub(r'```[\s\S]*?```', '', content)
+        # Remove inline code
+        clean_content = re.sub(r'`[^`]+`', '', clean_content)
+        
+        # Find inline tags in cleaned content
+        # More strict pattern: tag must be preceded by whitespace or start of line
+        inline_tags = re.findall(r'(?:^|[\s\n])#([a-zA-Z0-9_\-/]+)(?=\s|$)', clean_content, re.MULTILINE)
         tags.update(inline_tags)
         
         return sorted(list(tags))
@@ -158,8 +186,15 @@ class ObsidianVault:
         if not full_path.exists():
             raise FileNotFoundError(f"Note not found: {path}")
         
-        # Read file content
-        content = full_path.read_text(encoding='utf-8')
+        # Check file size to prevent memory issues
+        stat = full_path.stat()
+        max_size = 10 * 1024 * 1024  # 10MB limit
+        if stat.st_size > max_size:
+            raise ValueError(f"File too large: {stat.st_size} bytes (max: {max_size} bytes)")
+        
+        # Read file content asynchronously
+        async with aiofiles.open(full_path, 'r', encoding='utf-8') as f:
+            content = await f.read()
         
         # Parse frontmatter
         frontmatter, clean_content = self._parse_frontmatter(content)
@@ -210,8 +245,9 @@ class ObsidianVault:
         # Create parent directories if needed
         full_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Write content
-        full_path.write_text(content, encoding='utf-8')
+        # Write content asynchronously
+        async with aiofiles.open(full_path, 'w', encoding='utf-8') as f:
+            await f.write(content)
         
         # Return the newly created note
         return await self.read_note(path)
@@ -239,55 +275,106 @@ class ObsidianVault:
         full_path.unlink()
         return True
     
-    async def search_notes(self, query: str, context_length: int = 100) -> List[Dict[str, Any]]:
+    async def _update_search_index(self) -> None:
+        """Update the search index with current vault content."""
+        import time
+        
+        async with self._index_lock:
+            # Clear existing index
+            self._search_index.clear()
+            
+            # Index all markdown files
+            for md_file in self.vault_path.rglob("*.md"):
+                try:
+                    # Get file stats
+                    stat = md_file.stat()
+                    rel_path = str(md_file.relative_to(self.vault_path))
+                    
+                    # Read content
+                    async with aiofiles.open(md_file, 'r', encoding='utf-8') as f:
+                        content = await f.read()
+                    
+                    # Store in index
+                    self._search_index[rel_path] = {
+                        'content': content.lower(),  # Store lowercase for searching
+                        'original_content': content,
+                        'mtime': stat.st_mtime,
+                        'size': stat.st_size
+                    }
+                except Exception:
+                    # Skip files we can't read
+                    continue
+            
+            self._index_timestamp = time.time()
+    
+    async def search_notes(self, query: str, context_length: int = 100, max_results: int = 50) -> List[Dict[str, Any]]:
         """
-        Search for notes containing query text.
+        Search for notes containing query text using indexed search.
         
         Args:
             query: Search query
             context_length: Characters to show around match
+            max_results: Maximum number of results to return
             
         Returns:
             List of search results
         """
-        results = []
+        import time
         
-        # Convert query to lowercase for case-insensitive search
+        # Update index if it's stale (older than 60 seconds)
+        if self._index_timestamp is None or (time.time() - self._index_timestamp) > 60:
+            await self._update_search_index()
+        
+        results = []
         query_lower = query.lower()
         
-        # Search all markdown files
-        for md_file in self.vault_path.rglob("*.md"):
-            try:
-                content = md_file.read_text(encoding='utf-8')
-                content_lower = content.lower()
+        # Search through indexed content
+        for rel_path, file_data in self._search_index.items():
+            if query_lower in file_data['content']:
+                content = file_data['original_content']
+                content_lower = file_data['content']
                 
-                # Check if query is in content
-                if query_lower in content_lower:
-                    # Find the match position
-                    match_pos = content_lower.find(query_lower)
-                    
-                    # Extract context
-                    start = max(0, match_pos - context_length // 2)
-                    end = min(len(content), match_pos + len(query) + context_length // 2)
+                # Find all matches
+                matches = []
+                start_pos = 0
+                while True:
+                    match_pos = content_lower.find(query_lower, start_pos)
+                    if match_pos == -1:
+                        break
+                    matches.append(match_pos)
+                    start_pos = match_pos + 1
+                
+                # Extract context for first match
+                if matches:
+                    first_match = matches[0]
+                    start = max(0, first_match - context_length // 2)
+                    end = min(len(content), first_match + len(query) + context_length // 2)
                     context = content[start:end].strip()
                     
-                    # Get relative path
-                    rel_path = md_file.relative_to(self.vault_path)
+                    # Add ellipsis if truncated
+                    if start > 0:
+                        context = "..." + context
+                    if end < len(content):
+                        context = context + "..."
+                    
+                    # Calculate simple relevance score based on match count
+                    score = min(len(matches) / 10.0 + 1.0, 5.0)  # Score between 1 and 5
                     
                     results.append({
-                        "path": str(rel_path),
-                        "score": 1.0,  # Simple scoring for now
+                        "path": rel_path,
+                        "score": score,
                         "matches": [query],
+                        "match_count": len(matches),
                         "context": context
                     })
-            except Exception:
-                # Skip files we can't read
-                continue
+                    
+                    # Stop if we have enough results
+                    if len(results) >= max_results:
+                        break
         
-        # Sort by score (all 1.0 for now, but ready for better scoring)
+        # Sort by score (descending) and limit results
         results.sort(key=lambda x: x["score"], reverse=True)
-        
-        return results
+        return results[:max_results]
     
     async def list_notes(self, directory: Optional[str] = None, recursive: bool = True) -> List[Dict[str, str]]:
         """
@@ -364,11 +451,17 @@ class ObsidianVault:
         if not full_path.exists():
             raise FileNotFoundError(f"Image not found: {path}")
         
-        # Read binary content
-        content = full_path.read_bytes()
+        # Check file size to prevent memory issues
+        stat = full_path.stat()
+        max_size = 50 * 1024 * 1024  # 50MB limit for images
+        if stat.st_size > max_size:
+            raise ValueError(f"Image too large: {stat.st_size} bytes (max: {max_size} bytes)")
+        
+        # Read binary content asynchronously
+        async with aiofiles.open(full_path, 'rb') as f:
+            content = await f.read()
         
         # Encode to base64
-        import base64
         base64_content = base64.b64encode(content).decode('utf-8')
         
         # Determine MIME type
