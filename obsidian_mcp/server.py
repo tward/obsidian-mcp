@@ -4,7 +4,8 @@ import os
 from typing import Annotated, Optional, List, Literal
 from pydantic import Field
 from fastmcp import FastMCP
-from fastmcp.exceptions import McpError
+from fastmcp.exceptions import ToolError
+from .utils.filesystem import init_vault
 
 # Import all tools
 from .tools import (
@@ -27,16 +28,20 @@ from .tools import (
     get_backlinks,
     get_outgoing_links,
     find_broken_links,
+    read_image,
 )
 
-# Check for API key
-if not os.getenv("OBSIDIAN_REST_API_KEY"):
-    raise ValueError("OBSIDIAN_REST_API_KEY environment variable must be set")
+# Check for vault path
+if not os.getenv("OBSIDIAN_VAULT_PATH"):
+    raise ValueError("OBSIDIAN_VAULT_PATH environment variable must be set")
+
+# Initialize vault
+init_vault()
 
 # Create FastMCP server instance
 mcp = FastMCP(
     "obsidian-mcp",
-    instructions="MCP server for interacting with Obsidian vaults through the Local REST API"
+    instructions="MCP server for direct filesystem access to Obsidian vaults"
 )
 
 # Register tools with proper error handling
@@ -49,6 +54,10 @@ async def read_note_tool(
         max_length=255,
         examples=["Daily/2024-01-15.md", "Projects/AI Research.md", "Ideas/Quick Note.md"]
     )],
+    include_images: Annotated[bool, Field(
+        description="Whether to load and include embedded images as base64 data",
+        default=False
+    )] = False,
     ctx=None
 ):
     """
@@ -59,20 +68,22 @@ async def read_note_tool(
     - Analyzing or processing existing note data
     - ALWAYS before updating a note to preserve existing content
     - Verifying a note exists before making changes
+    - Reading notes with embedded images (set include_images=true)
     
     When NOT to use:
     - Searching multiple notes (use search_notes instead)
     - Getting only metadata (use get_note_info for efficiency)
     
     Returns:
-        Note content and metadata including tags, aliases, and frontmatter
+        Note content and metadata including tags, aliases, and frontmatter.
+        If include_images is true, also returns embedded images as base64-encoded data.
     """
     try:
-        return await read_note(path, ctx)
+        return await read_note(path, include_images, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to read note: {str(e)}")
+        raise ToolError(f"Failed to read note: {str(e)}")
 
 @mcp.tool()
 async def create_note_tool(
@@ -116,9 +127,9 @@ async def create_note_tool(
     try:
         return await create_note(path, content, overwrite, ctx)
     except (ValueError, FileExistsError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to create note: {str(e)}")
+        raise ToolError(f"Failed to create note: {str(e)}")
 
 @mcp.tool()
 async def update_note_tool(
@@ -165,9 +176,9 @@ async def update_note_tool(
     try:
         return await update_note(path, content, create_if_not_exists, merge_strategy, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to update note: {str(e)}")
+        raise ToolError(f"Failed to update note: {str(e)}")
 
 @mcp.tool()
 async def delete_note_tool(path: str, ctx=None):
@@ -183,9 +194,9 @@ async def delete_note_tool(path: str, ctx=None):
     try:
         return await delete_note(path, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to delete note: {str(e)}")
+        raise ToolError(f"Failed to delete note: {str(e)}")
 
 @mcp.tool()
 async def search_notes_tool(
@@ -227,9 +238,9 @@ async def search_notes_tool(
     try:
         return await search_notes(query, context_length, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Search failed: {str(e)}")
+        raise ToolError(f"Search failed: {str(e)}")
 
 @mcp.tool()
 async def search_by_date_tool(
@@ -268,9 +279,9 @@ async def search_by_date_tool(
     try:
         return await search_by_date(date_type, days_ago, operator, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Date search failed: {str(e)}")
+        raise ToolError(f"Date search failed: {str(e)}")
 
 @mcp.tool()
 async def list_notes_tool(directory: str = None, recursive: bool = True, ctx=None):
@@ -287,7 +298,7 @@ async def list_notes_tool(directory: str = None, recursive: bool = True, ctx=Non
     try:
         return await list_notes(directory, recursive, ctx)
     except Exception as e:
-        raise McpError(f"Failed to list notes: {str(e)}")
+        raise ToolError(f"Failed to list notes: {str(e)}")
 
 @mcp.tool()
 async def list_folders_tool(
@@ -321,9 +332,9 @@ async def list_folders_tool(
     try:
         return await list_folders(directory, recursive, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to list folders: {str(e)}")
+        raise ToolError(f"Failed to list folders: {str(e)}")
 
 @mcp.tool()
 async def move_note_tool(source_path: str, destination_path: str, update_links: bool = True, ctx=None):
@@ -341,9 +352,9 @@ async def move_note_tool(source_path: str, destination_path: str, update_links: 
     try:
         return await move_note(source_path, destination_path, update_links, ctx)
     except (ValueError, FileNotFoundError, FileExistsError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to move note: {str(e)}")
+        raise ToolError(f"Failed to move note: {str(e)}")
 
 @mcp.tool()
 async def create_folder_tool(
@@ -382,9 +393,9 @@ async def create_folder_tool(
     try:
         return await create_folder(folder_path, create_placeholder, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to create folder: {str(e)}")
+        raise ToolError(f"Failed to create folder: {str(e)}")
 
 @mcp.tool()
 async def move_folder_tool(
@@ -425,9 +436,9 @@ async def move_folder_tool(
     try:
         return await move_folder(source_folder, destination_folder, update_links, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to move folder: {str(e)}")
+        raise ToolError(f"Failed to move folder: {str(e)}")
 
 @mcp.tool()
 async def add_tags_tool(
@@ -463,9 +474,9 @@ async def add_tags_tool(
     try:
         return await add_tags(path, tags, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to add tags: {str(e)}")
+        raise ToolError(f"Failed to add tags: {str(e)}")
 
 @mcp.tool()
 async def update_tags_tool(
@@ -506,9 +517,9 @@ async def update_tags_tool(
     try:
         return await update_tags(path, tags, merge, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to update tags: {str(e)}")
+        raise ToolError(f"Failed to update tags: {str(e)}")
 
 @mcp.tool()
 async def remove_tags_tool(path: str, tags: list[str], ctx=None):
@@ -525,9 +536,9 @@ async def remove_tags_tool(path: str, tags: list[str], ctx=None):
     try:
         return await remove_tags(path, tags, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to remove tags: {str(e)}")
+        raise ToolError(f"Failed to remove tags: {str(e)}")
 
 @mcp.tool()
 async def get_note_info_tool(path: str, ctx=None):
@@ -543,9 +554,9 @@ async def get_note_info_tool(path: str, ctx=None):
     try:
         return await get_note_info(path, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to get note info: {str(e)}")
+        raise ToolError(f"Failed to get note info: {str(e)}")
 
 @mcp.tool()
 async def get_backlinks_tool(
@@ -592,9 +603,9 @@ async def get_backlinks_tool(
     try:
         return await get_backlinks(path, include_context, context_length, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to get backlinks: {str(e)}")
+        raise ToolError(f"Failed to get backlinks: {str(e)}")
 
 @mcp.tool()
 async def get_outgoing_links_tool(
@@ -630,9 +641,9 @@ async def get_outgoing_links_tool(
     try:
         return await get_outgoing_links(path, check_validity, ctx)
     except (ValueError, FileNotFoundError) as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to get outgoing links: {str(e)}")
+        raise ToolError(f"Failed to get outgoing links: {str(e)}")
 
 @mcp.tool()
 async def find_broken_links_tool(
@@ -668,9 +679,9 @@ async def find_broken_links_tool(
     try:
         return await find_broken_links(directory, single_note, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to find broken links: {str(e)}")
+        raise ToolError(f"Failed to find broken links: {str(e)}")
 
 @mcp.tool()
 async def list_tags_tool(
@@ -709,11 +720,46 @@ async def list_tags_tool(
     try:
         return await list_tags(include_counts, sort_by, ctx)
     except ValueError as e:
-        raise McpError(str(e))
+        raise ToolError(str(e))
     except Exception as e:
-        raise McpError(f"Failed to list tags: {str(e)}")
+        raise ToolError(f"Failed to list tags: {str(e)}")
 
-
+@mcp.tool()
+async def read_image_tool(
+    path: Annotated[str, Field(
+        description="Path to the image file relative to vault root",
+        pattern=r"^[^/].*\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$",
+        min_length=1,
+        max_length=255,
+        examples=["attachments/screenshot.png", "images/diagram.jpg", "media/logo.svg"]
+    )],
+    include_metadata: Annotated[bool, Field(
+        description="Whether to include file metadata like size",
+        default=False
+    )] = False,
+    ctx=None
+):
+    """
+    Read an image file from the Obsidian vault as base64-encoded data.
+    
+    When to use:
+    - Loading specific image files from the vault
+    - Displaying images in MCP clients
+    - Extracting images for processing or export
+    
+    When NOT to use:
+    - Getting images embedded in notes (use read_note with include_images=true)
+    - Searching for images (use list_notes with appropriate filters)
+    
+    Returns:
+        Base64-encoded image data with MIME type
+    """
+    try:
+        return await read_image(path, include_metadata, ctx)
+    except (ValueError, FileNotFoundError) as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(f"Failed to read image: {str(e)}")
 
 
 def main():

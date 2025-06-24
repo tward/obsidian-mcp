@@ -1,7 +1,6 @@
 fastmcp
-httpx
-urllib3
 pydantic>=2.0
+python-dotenv
 
 # Development dependencies
 pytest>=7.0

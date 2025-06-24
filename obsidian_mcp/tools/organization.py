@@ -3,7 +3,8 @@
 import re
 from typing import List, Dict, Any, Optional
 from fastmcp import Context
-from ..utils import ObsidianAPI, validate_note_path, sanitize_path, is_markdown_file
+from ..utils.filesystem import get_vault
+from ..utils import validate_note_path, sanitize_path, is_markdown_file
 from ..utils.validation import validate_tags
 from ..models import Note, NoteMetadata, Tag
 from ..constants import ERROR_MESSAGES
@@ -55,20 +56,24 @@ async def move_note(
     if ctx:
         ctx.info(f"Moving note from {source_path} to {destination_path}")
     
-    api = ObsidianAPI()
+    vault = get_vault()
     
     # Check if source exists
-    source_note = await api.get_note(source_path)
-    if not source_note:
+    try:
+        source_note = await vault.read_note(source_path)
+    except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=source_path))
     
     # Check if destination already exists
-    dest_note = await api.get_note(destination_path)
-    if dest_note:
+    try:
+        await vault.read_note(destination_path)
         raise FileExistsError(f"Note already exists at destination: {destination_path}")
+    except FileNotFoundError:
+        # Good, destination doesn't exist
+        pass
     
     # Create note at new location
-    await api.create_note(destination_path, source_note.content)
+    await vault.write_note(destination_path, source_note.content, overwrite=False)
     
     # Update links if requested
     links_updated = 0
@@ -80,7 +85,7 @@ async def move_note(
         pass
     
     # Delete original note
-    await api.delete_note(source_path)
+    await vault.delete_note(source_path)
     
     return {
         "source": source_path,
@@ -133,7 +138,7 @@ async def create_folder(
     if ctx:
         ctx.info(f"Creating folder: {folder_path}")
     
-    api = ObsidianAPI()
+    vault = get_vault()
     
     # Split the path to check each level
     path_parts = folder_path.split('/')
@@ -182,7 +187,7 @@ async def create_folder(
     placeholder_content = f"# Folder: {folder_path}\n\nThis file ensures the folder exists in the vault structure.\n"
     
     try:
-        await api.create_note(placeholder_path, placeholder_content)
+        await vault.write_note(placeholder_path, placeholder_content, overwrite=False)
         return {
             "folder": folder_path,
             "created": True,
@@ -194,7 +199,7 @@ async def create_folder(
         try:
             readme_path = f"{folder_path}/README.md"
             readme_content = f"# {folder_path.split('/')[-1]}\n\nThis folder contains notes related to {folder_path.replace('/', ' > ')}.\n"
-            await api.create_note(readme_path, readme_content)
+            await vault.write_note(readme_path, readme_content, overwrite=False)
             return {
                 "folder": folder_path,
                 "created": True,
@@ -258,7 +263,7 @@ async def move_folder(
     if ctx:
         ctx.info(f"Moving folder from {source_folder} to {destination_folder}")
     
-    api = ObsidianAPI()
+    vault = get_vault()
     
     # Get all notes in the source folder recursively
     from ..tools.search_discovery import list_notes
@@ -287,16 +292,15 @@ async def move_folder(
         
         try:
             # Read the note
-            note = await api.get_note(old_path)
-            if note:
-                # Create at new location
-                await api.create_note(new_path, note.content)
-                # Delete from old location
-                await api.delete_note(old_path)
-                notes_moved += 1
-                
-                if ctx:
-                    ctx.info(f"Moved: {old_path} → {new_path}")
+            note = await vault.read_note(old_path)
+            # Create at new location
+            await vault.write_note(new_path, note.content, overwrite=False)
+            # Delete from old location
+            await vault.delete_note(old_path)
+            notes_moved += 1
+            
+            if ctx:
+                ctx.info(f"Moved: {old_path} → {new_path}")
         except Exception as e:
             errors.append(f"Failed to move {old_path}: {str(e)}")
             if ctx:
@@ -369,10 +373,11 @@ async def add_tags(
     if ctx:
         ctx.info(f"Adding tags to {path}: {tags}")
     
-    api = ObsidianAPI()
-    note = await api.get_note(path)
+    vault = get_vault()
     
-    if not note:
+    try:
+        note = await vault.read_note(path)
+    except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
     
     # Parse frontmatter and update tags
@@ -380,10 +385,10 @@ async def add_tags(
     updated_content = _update_frontmatter_tags(content, tags, "add")
     
     # Update the note
-    await api.update_note(path, updated_content)
+    await vault.write_note(path, updated_content, overwrite=True)
     
     # Get updated note to return current tags
-    updated_note = await api.get_note(path)
+    updated_note = await vault.read_note(path)
     
     return {
         "path": path,
@@ -441,10 +446,11 @@ async def update_tags(
     if ctx:
         ctx.info(f"Updating tags for {path}: {tags} (merge={merge})")
     
-    api = ObsidianAPI()
-    note = await api.get_note(path)
+    vault = get_vault()
     
-    if not note:
+    try:
+        note = await vault.read_note(path)
+    except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
     
     # Store previous tags
@@ -465,7 +471,7 @@ async def update_tags(
     updated_content = _update_frontmatter_tags(content, final_tags, "replace")
     
     # Update the note
-    await api.update_note(path, updated_content)
+    await vault.write_note(path, updated_content, overwrite=True)
     
     return {
         "path": path,
@@ -519,10 +525,11 @@ async def remove_tags(
     if ctx:
         ctx.info(f"Removing tags from {path}: {tags}")
     
-    api = ObsidianAPI()
-    note = await api.get_note(path)
+    vault = get_vault()
     
-    if not note:
+    try:
+        note = await vault.read_note(path)
+    except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
     
     # Parse frontmatter and update tags
@@ -530,10 +537,10 @@ async def remove_tags(
     updated_content = _update_frontmatter_tags(content, tags, "remove")
     
     # Update the note
-    await api.update_note(path, updated_content)
+    await vault.write_note(path, updated_content, overwrite=True)
     
     # Get updated note to return current tags
-    updated_note = await api.get_note(path)
+    updated_note = await vault.read_note(path)
     
     return {
         "path": path,
@@ -587,10 +594,11 @@ async def get_note_info(
     if ctx:
         ctx.info(f"Getting info for: {path}")
     
-    api = ObsidianAPI()
-    note = await api.get_note(path)
+    vault = get_vault()
     
-    if not note:
+    try:
+        note = await vault.read_note(path)
+    except FileNotFoundError:
         return {
             "path": path,
             "exists": False
@@ -739,78 +747,48 @@ async def list_tags(
     if ctx:
         ctx.info("Collecting tags from vault...")
     
-    api = ObsidianAPI()
+    vault = get_vault()
     
     # Dictionary to store tag counts
     tag_counts = {}
     
     try:
-        # OPTIMIZATION: Use search API to get all notes with tags in a single query
-        # This uses JsonLogic to find notes where tags field exists
-        # Since we can't check array length with count, we just check for existence
-        json_logic_query = {
-            "!!": {"var": "tags"}  # tags field exists and is truthy
-        }
+        # Get all notes in the vault
+        all_notes = await vault.list_notes(recursive=True)
         
-        # Get all notes with tags using a single API call
-        import httpx
-        async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
-            url = f"{api.base_url}/search/"
-            headers = api.headers.copy()
-            headers["Content-Type"] = "application/vnd.olrapi.jsonlogic+json"
+        if ctx:
+            ctx.info(f"Scanning {len(all_notes)} notes for tags...")
+        
+        # Process notes in batches for better performance
+        import asyncio
+        
+        batch_size = 10  # Process 10 notes at a time
+        for i in range(0, len(all_notes), batch_size):
+            batch = all_notes[i:i + batch_size]
             
-            response = await client.post(
-                url,
-                headers=headers,
-                json=json_logic_query
-            )
-            response.raise_for_status()
+            # Create tasks for concurrent reading
+            tasks = [vault.read_note(note_info["path"]) for note_info in batch]
             
-            results = response.json()
-            
-            if ctx:
-                ctx.info(f"Found {len(results)} notes with tags")
-            
-            # Now fetch only the notes that have tags
-            # Use asyncio.gather for concurrent fetching (much faster)
-            import asyncio
-            
-            # Extract note paths from results
-            note_paths = []
-            for result in results:
-                if isinstance(result, dict) and "filename" in result:
-                    note_paths.append(result["filename"])
-                elif isinstance(result, str):
-                    note_paths.append(result)
-            
-            # Fetch notes concurrently in batches
-            batch_size = 10  # Process 10 notes at a time to avoid overwhelming the API
-            for i in range(0, len(note_paths), batch_size):
-                batch = note_paths[i:i + batch_size]
+            # Wait for all tasks in this batch to complete
+            try:
+                notes = await asyncio.gather(*tasks, return_exceptions=True)
                 
-                # Create tasks for concurrent fetching
-                tasks = [api.get_note(path) for path in batch]
-                
-                # Wait for all tasks in this batch to complete
-                try:
-                    notes = await asyncio.gather(*tasks, return_exceptions=True)
-                    
-                    # Process results
-                    for note in notes:
-                        if isinstance(note, Exception):
-                            # Skip failed requests
-                            continue
-                            
-                        # Extract tags
-                        if note and note.metadata and note.metadata.tags:
-                            for tag in note.metadata.tags:
-                                # Tags are already normalized in our metadata parsing
-                                if tag:
-                                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
-                
-                except Exception:
-                    # Skip this batch if there's an error
-                    continue
+                # Process results
+                for note in notes:
+                    if isinstance(note, Exception):
+                        # Skip failed reads
+                        continue
+                        
+                    # Extract tags
+                    if note and note.metadata and note.metadata.tags:
+                        for tag in note.metadata.tags:
+                            # Tags are already normalized in our metadata parsing
+                            if tag:
+                                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            
+            except Exception:
+                # Skip this batch if there's an error
+                continue
         
         # Format results
         if include_counts:

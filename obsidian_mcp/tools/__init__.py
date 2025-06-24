@@ -27,6 +27,9 @@ from .link_management import (
     get_outgoing_links,
     find_broken_links,
 )
+from .image_management import (
+    read_image,
+)
 
 __all__ = [
     # Note management
@@ -52,4 +55,6 @@ __all__ = [
     "get_backlinks",
     "get_outgoing_links",
     "find_broken_links",
+    # Image management
+    "read_image",
 ]

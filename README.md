@@ -1,6 +1,6 @@
 # Obsidian MCP Server
 
-A Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with your Obsidian vault. This server provides tools for reading, creating, searching, and managing notes in Obsidian through the Local REST API plugin.
+A Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with your Obsidian vault. This server provides tools for reading, creating, searching, and managing notes in Obsidian through direct filesystem access.
 
 ## Features
 
@@ -11,13 +11,13 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 - 🔗 **Link management** - Find backlinks, analyze outgoing links, and identify broken links
 - 📊 **Note insights** - Get statistics like word count and link analysis
 - 🎯 **AI-optimized** - Clear error messages and smart defaults for better AI interactions
-- 🔒 **Secure** - API key authentication with local-only connections
+- 🔒 **Secure** - Direct filesystem access with path validation
 - ⚡ **Performance optimized** - Concurrent operations and batching for large vaults
 - 🚀 **Bulk operations** - Create folder hierarchies and move entire folders with all their contents
 
 ## Prerequisites
 
-- **Obsidian** with the [Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) plugin installed and enabled
+- **Obsidian** vault on your local filesystem
 - **Python 3.10+** installed on your system
 - **Node.js** (optional, for running MCP Inspector)
 
@@ -25,11 +25,9 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 
 ### Quick Install
 
-1. **Install and configure Obsidian:**
-   - Install the [Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) plugin in Obsidian
-   - Enable the plugin in Settings > Community plugins
-   - Go to Settings > Local REST API
-   - Copy your API key (you'll need this for step 2)
+1. **Locate your Obsidian vault:**
+   - Find the path to your Obsidian vault on your filesystem
+   - Example: `/Users/yourname/Documents/MyVault` or `C:\Users\YourName\Documents\MyVault`
 
 2. **Configure your AI tool:**
 
@@ -47,7 +45,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
          "command": "uvx",
          "args": ["obsidian-mcp"],
          "env": {
-           "OBSIDIAN_REST_API_KEY": "your-api-key-here"
+           "OBSIDIAN_VAULT_PATH": "/path/to/your/obsidian/vault"
          }
        }
      }
@@ -69,7 +67,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
          "command": "uvx",
          "args": ["obsidian-mcp"],
          "env": {
-           "OBSIDIAN_REST_API_KEY": "your-api-key-here"
+           "OBSIDIAN_VAULT_PATH": "/path/to/your/obsidian/vault"
          }
        }
      }
@@ -92,7 +90,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
          "command": "uvx",
          "args": ["obsidian-mcp"],
          "env": {
-           "OBSIDIAN_REST_API_KEY": "your-api-key-here"
+           "OBSIDIAN_VAULT_PATH": "/path/to/your/obsidian/vault"
          }
        }
      }
@@ -172,7 +170,7 @@ Here are some example prompts to get started:
          "cwd": "/path/to/obsidian-mcp",
          "env": {
            "PYTHONPATH": "/path/to/obsidian-mcp",
-           "OBSIDIAN_REST_API_KEY": "your-api-key-here"
+           "OBSIDIAN_VAULT_PATH": "/path/to/your/obsidian/vault"
          }
        }
      }
@@ -193,7 +191,7 @@ obsidian-mcp/
 │   ├── models/             # Pydantic models for validation
 │   │   └── obsidian.py    # Note, SearchResult, VaultItem models
 │   ├── utils/              # Shared utilities
-│   │   ├── obsidian_api.py      # REST API client wrapper
+│   │   ├── filesystem.py        # Direct filesystem access
 │   │   ├── validators.py        # Path validation, sanitization
 │   │   └── validation.py        # Comprehensive parameter validation
 │   └── constants.py       # API endpoints, defaults, enhanced error messages
