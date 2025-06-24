@@ -194,6 +194,110 @@ class PersistentSearchIndex:
             
         return results
         
+    async def search_regex(self, pattern: str, flags: int = 0, limit: int = 50, 
+                          context_length: int = 100) -> List[Dict[str, Any]]:
+        """
+        Search using regular expressions with efficient streaming.
+        
+        Args:
+            pattern: Regular expression pattern
+            flags: Regex flags (e.g., re.IGNORECASE)
+            limit: Maximum number of results
+            context_length: Characters to show around match
+            
+        Returns:
+            List of search results with matches and context
+        """
+        import re
+        
+        # Compile regex pattern
+        try:
+            regex = re.compile(pattern, flags)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+        
+        results = []
+        total_results = 0
+        
+        # Stream through files from database
+        cursor = await self.db.execute("""
+            SELECT filepath, content, mtime
+            FROM file_index
+            ORDER BY mtime DESC
+        """)
+        
+        async for row in cursor:
+            if total_results >= limit:
+                break
+                
+            filepath, content, mtime = row
+            
+            # Find matches in this file
+            matches = list(regex.finditer(content))
+            
+            if matches:
+                # Calculate line starts for line numbers (more efficient method)
+                line_starts = [0]
+                for i, char in enumerate(content):
+                    if char == '\n':
+                        line_starts.append(i + 1)
+                
+                # Process matches
+                match_contexts = []
+                for match_idx, match in enumerate(matches[:5]):  # Limit matches per file
+                    match_start = match.start()
+                    match_end = match.end()
+                    
+                    # Find line number using binary search
+                    line_num = self._find_line_number(line_starts, match_start)
+                    
+                    # Extract context
+                    context_start = max(0, match_start - context_length // 2)
+                    context_end = min(len(content), match_end + context_length // 2)
+                    context = content[context_start:context_end].strip()
+                    
+                    # Add ellipsis if truncated
+                    if context_start > 0:
+                        context = "..." + context
+                    if context_end < len(content):
+                        context = context + "..."
+                    
+                    match_contexts.append({
+                        "match": match.group(0),
+                        "line": line_num,
+                        "context": context,
+                        "groups": match.groups() if match.groups() else None
+                    })
+                
+                results.append({
+                    "filepath": filepath,
+                    "match_count": len(matches),
+                    "matches": match_contexts,
+                    "score": min(len(matches) / 5.0 + 1.0, 5.0)
+                })
+                
+                total_results += 1
+        
+        return results
+    
+    def _find_line_number(self, line_starts: List[int], position: int) -> int:
+        """Find line number using binary search."""
+        left, right = 0, len(line_starts) - 1
+        
+        while left <= right:
+            mid = (left + right) // 2
+            if mid + 1 < len(line_starts):
+                if line_starts[mid] <= position < line_starts[mid + 1]:
+                    return mid + 1
+                elif position < line_starts[mid]:
+                    right = mid - 1
+                else:
+                    left = mid + 1
+            else:
+                return mid + 1
+        
+        return len(line_starts)
+        
     async def get_all_files(self) -> List[str]:
         """Get list of all indexed files."""
         cursor = await self.db.execute("SELECT filepath FROM file_index")

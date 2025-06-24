@@ -586,10 +586,27 @@ class ObsidianVault:
         """
         import time
         
+        # Initialize persistent index if needed
+        if self.use_persistent_index and not self._persistent_index_initialized:
+            await self._initialize_persistent_index()
+        
         # Update index if it's stale
         if self._index_timestamp is None or (time.time() - self._index_timestamp) > 60:
             await self._update_search_index()
         
+        # Use persistent index if available for efficient regex search
+        if self.use_persistent_index and self.persistent_index:
+            results = await self.persistent_index.search_regex(pattern, flags, max_results, context_length)
+            # Convert filepath to path for consistency
+            for result in results:
+                result["path"] = result.pop("filepath")
+            return results
+        else:
+            # Fall back to in-memory search
+            return await self._search_by_regex_memory(pattern, flags, context_length, max_results)
+    
+    async def _search_by_regex_memory(self, pattern: str, flags: int = 0, context_length: int = 100, max_results: int = 50) -> List[Dict[str, Any]]:
+        """Legacy in-memory regex search (fallback when persistent index is disabled)."""
         # Compile regex pattern
         try:
             regex = re.compile(pattern, flags)
