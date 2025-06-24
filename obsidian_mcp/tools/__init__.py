@@ -10,6 +10,7 @@ from .search_discovery import (
     search_notes,
     search_by_date,
     search_by_regex,
+    search_by_property,
     list_notes,
     list_folders,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "search_notes",
     "search_by_date",
     "search_by_regex",
+    "search_by_property",
     "list_notes",
     "list_folders",
     # Organization

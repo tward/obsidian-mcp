@@ -96,6 +96,41 @@ class ObsidianVault:
         
         return resolved
     
+    def _get_absolute_path(self, path: str) -> Path:
+        """
+        Get absolute path for reading existing files (more lenient validation).
+        Only checks for directory traversal, not character restrictions.
+        
+        Args:
+            path: Relative path within vault
+            
+        Returns:
+            Absolute Path object
+            
+        Raises:
+            ValueError: If path escapes vault
+        """
+        # Normalize path separators
+        normalized = path.replace('\\', '/')
+        
+        # Basic security check - no directory traversal
+        parts = normalized.split('/')
+        for part in parts:
+            if part in ('..', '.', ''):
+                raise ValueError(f"Invalid path component: {part}")
+        
+        # Convert to Path object
+        full_path = self.vault_path / path
+        
+        # Resolve to absolute path and check it's within vault
+        try:
+            resolved = full_path.resolve()
+            resolved.relative_to(self.vault_path.resolve())
+        except (ValueError, RuntimeError):
+            raise ValueError(f"Path escapes vault: {path}")
+        
+        return resolved
+    
     def _parse_frontmatter(self, content: str) -> Tuple[Dict[str, Any], str]:
         """
         Parse YAML frontmatter from markdown content.
@@ -144,6 +179,58 @@ class ObsidianVault:
         
         return frontmatter, clean_content
     
+    def _normalize_frontmatter(self, frontmatter: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize frontmatter to handle legacy property names.
+        
+        Migrations:
+        - tag -> tags (as list)
+        - alias -> aliases (as list)
+        - cssClass -> cssclasses (as list)
+        
+        Args:
+            frontmatter: Raw frontmatter dict
+            
+        Returns:
+            Normalized frontmatter dict
+        """
+        normalized = frontmatter.copy()
+        
+        # Handle tag/tags migration
+        if "tag" in normalized and "tags" not in normalized:
+            tag_value = normalized.pop("tag")
+            if isinstance(tag_value, str):
+                normalized["tags"] = [tag_value]
+            elif isinstance(tag_value, list):
+                normalized["tags"] = tag_value
+        
+        # Handle alias/aliases migration
+        if "alias" in normalized and "aliases" not in normalized:
+            alias_value = normalized.pop("alias")
+            if isinstance(alias_value, str):
+                normalized["aliases"] = [alias_value]
+            elif isinstance(alias_value, list):
+                normalized["aliases"] = alias_value
+        
+        # Handle cssClass/cssclasses migration
+        if "cssClass" in normalized and "cssclasses" not in normalized:
+            css_value = normalized.pop("cssClass")
+            if isinstance(css_value, str):
+                normalized["cssclasses"] = [css_value]
+            elif isinstance(css_value, list):
+                normalized["cssclasses"] = css_value
+        
+        # Ensure plural properties are lists
+        for key in ["tags", "aliases", "cssclasses"]:
+            if key in normalized:
+                value = normalized[key]
+                if isinstance(value, str):
+                    normalized[key] = [value]
+                elif not isinstance(value, list):
+                    normalized[key] = []
+        
+        return normalized
+    
     def _extract_tags(self, content: str, frontmatter: Dict[str, Any]) -> List[str]:
         """
         Extract all tags from content and frontmatter.
@@ -157,8 +244,8 @@ class ObsidianVault:
         """
         tags = set()
         
-        # Get tags from frontmatter
-        fm_tags = frontmatter.get("tags", [])
+        # Get tags from frontmatter (supports both "tag" and "tags")
+        fm_tags = frontmatter.get("tags", frontmatter.get("tag", []))
         if isinstance(fm_tags, str):
             fm_tags = [fm_tags]
         elif not isinstance(fm_tags, list):
@@ -176,7 +263,8 @@ class ObsidianVault:
         
         # Find inline tags in cleaned content
         # More strict pattern: tag must be preceded by whitespace or start of line
-        inline_tags = re.findall(r'(?:^|[\s\n])#([a-zA-Z0-9_\-/]+)(?=\s|$)', clean_content, re.MULTILINE)
+        # Support hierarchical tags with forward slashes (e.g., #parent/child/grandchild)
+        inline_tags = re.findall(r'(?:^|[\s\n])#([a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_\-]+)*)(?=\s|$)', clean_content, re.MULTILINE)
         tags.update(inline_tags)
         
         return sorted(list(tags))
@@ -195,7 +283,8 @@ class ObsidianVault:
         if not path.endswith('.md'):
             path += '.md'
         
-        full_path = self._ensure_safe_path(path)
+        # Use lenient path validation for reading existing files
+        full_path = self._get_absolute_path(path)
         
         if not full_path.exists():
             raise FileNotFoundError(f"Note not found: {path}")
@@ -213,8 +302,11 @@ class ObsidianVault:
         # Parse frontmatter
         frontmatter, clean_content = self._parse_frontmatter(content)
         
+        # Normalize frontmatter for legacy property names
+        normalized_frontmatter = self._normalize_frontmatter(frontmatter)
+        
         # Extract tags
-        tags = self._extract_tags(clean_content, frontmatter)
+        tags = self._extract_tags(clean_content, normalized_frontmatter)
         
         # Get file stats
         stat = full_path.stat()
@@ -222,10 +314,10 @@ class ObsidianVault:
         # Create metadata
         metadata = NoteMetadata(
             tags=tags,
-            aliases=frontmatter.get("aliases", []),
+            aliases=normalized_frontmatter.get("aliases", []),
             created=datetime.fromtimestamp(stat.st_ctime),
             modified=datetime.fromtimestamp(stat.st_mtime),
-            frontmatter=frontmatter
+            frontmatter=normalized_frontmatter
         )
         
         return Note(
@@ -692,7 +784,8 @@ class ObsidianVault:
         
         # Determine search path
         if directory:
-            search_path = self._ensure_safe_path(directory)
+            # Use lenient validation for reading existing directories
+            search_path = self._get_absolute_path(directory)
             if not search_path.exists() or not search_path.is_dir():
                 return []
         else:
@@ -737,7 +830,7 @@ class ObsidianVault:
         
         return None
     
-    async def read_image(self, path: str, max_width: int = 800) -> Dict[str, Any]:
+    async def read_image(self, path: str, max_width: int = 1600) -> Dict[str, Any]:
         """
         Read an image file from the vault with automatic resizing.
         
@@ -748,7 +841,8 @@ class ObsidianVault:
         Returns:
             Dictionary with image data and metadata
         """
-        full_path = self._ensure_safe_path(path)
+        # Use lenient validation for reading existing image files
+        full_path = self._get_absolute_path(path)
         
         if not full_path.exists():
             raise FileNotFoundError(f"Image not found: {path}")

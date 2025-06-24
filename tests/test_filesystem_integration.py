@@ -99,21 +99,25 @@ And another style:
         """Test reading a note."""
         result = await read_note("test_note.md")
         
+        assert result["success"] == True
         assert result["path"] == "test_note.md"
-        assert "Test Note" in result["content"]
-        assert "test" in result["metadata"]["tags"]
-        assert "demo" in result["metadata"]["tags"]
+        assert result["operation"] == "read"
+        assert "Test Note" in result["details"]["content"]
+        assert "test" in result["details"]["metadata"]["tags"]
+        assert "demo" in result["details"]["metadata"]["tags"]
     
     @pytest.mark.asyncio
     async def test_read_note_with_frontmatter(self, test_vault):
         """Test reading a note with YAML frontmatter."""
         result = await read_note("folder/nested_note.md")
         
+        assert result["success"] == True
         assert result["path"] == "folder/nested_note.md"
-        assert result["metadata"]["frontmatter"]["title"] == "Nested Note"
-        assert "nested" in result["metadata"]["tags"]
-        assert "inline-tag" in result["metadata"]["tags"]
-        assert "nested-example" in result["metadata"]["aliases"]
+        assert result["operation"] == "read"
+        assert result["details"]["metadata"]["frontmatter"]["title"] == "Nested Note"
+        assert "nested" in result["details"]["metadata"]["tags"]
+        assert "inline-tag" in result["details"]["metadata"]["tags"]
+        assert "nested-example" in result["details"]["metadata"]["aliases"]
     
     @pytest.mark.asyncio
     async def test_create_note(self, test_vault):
@@ -126,13 +130,15 @@ This is a newly created note.
 """
         result = await create_note("new_note.md", content)
         
+        assert result["success"] == True
         assert result["path"] == "new_note.md"
-        assert result["created"] == True
-        assert "created-tag" in result["metadata"]["tags"]
+        assert result["operation"] == "created"
+        assert result["details"]["created"] == True
+        assert "created-tag" in result["details"]["metadata"]["tags"]
         
         # Verify it was actually created
         read_result = await read_note("new_note.md")
-        assert read_result["content"] == content
+        assert read_result["details"]["content"] == content
     
     @pytest.mark.asyncio
     async def test_update_note(self, test_vault):
@@ -145,13 +151,15 @@ This content has been updated.
 """
         result = await update_note("test_note.md", new_content)
         
+        assert result["success"] == True
         assert result["path"] == "test_note.md"
-        assert result["updated"] == True
+        assert result["operation"] == "updated"
+        assert result["details"]["updated"] == True
         
         # Verify the update
         read_result = await read_note("test_note.md")
-        assert "Updated Test Note" in read_result["content"]
-        assert "updated" in read_result["metadata"]["tags"]
+        assert "Updated Test Note" in read_result["details"]["content"]
+        assert "updated" in read_result["details"]["metadata"]["tags"]
     
     @pytest.mark.asyncio
     async def test_delete_note(self, test_vault):
@@ -161,7 +169,9 @@ This content has been updated.
         
         # Delete it
         result = await delete_note("to_delete.md")
-        assert result["deleted"] == True
+        assert result["success"] == True
+        assert result["operation"] == "deleted"
+        assert result["details"]["deleted"] == True
         
         # Verify it's gone
         with pytest.raises(FileNotFoundError):
@@ -188,8 +198,8 @@ This content has been updated.
         """Test listing notes."""
         result = await list_notes()
         
-        assert result["count"] >= 3
-        paths = [n["path"] for n in result["notes"]]
+        assert result["total"] >= 3
+        paths = [n["path"] for n in result["items"]]
         assert "test_note.md" in paths
         assert "folder/nested_note.md" in paths
     

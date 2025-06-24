@@ -26,7 +26,7 @@ This release brings significant improvements to folder and tag management, perfo
 
 #### `create_folder`
 - Creates new folders including all parent folders in the path
-- Example: "Apple/Studies/J71P" creates all three levels if needed
+- Example: "Research/Studies/2024" creates all three levels if needed
 - Optionally creates placeholder files (.gitkeep or README.md)
 - Reports which folders were created vs already existed
 

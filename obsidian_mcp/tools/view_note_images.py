@@ -12,7 +12,7 @@ from ..constants import ERROR_MESSAGES
 async def view_note_images(
     path: str,
     image_index: Optional[int] = None,
-    max_width: int = 800,
+    max_width: int = 1600,
     ctx: Optional[Context] = None
 ) -> List[Image]:
     """

@@ -6,6 +6,7 @@ import re
 import asyncio
 import tempfile
 import shutil
+import time
 from pathlib import Path
 import pytest
 import pytest_asyncio
@@ -165,6 +166,102 @@ Also mentions #regex-patterns and #code-search.
         assert results[0]["path"] == "code_example.md"
         
         await vault.close()
+
+
+    @pytest.mark.asyncio
+    async def test_large_file_optimization(self):
+        """Test optimization for large files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir)
+            
+            # Create a large file (>1MB)
+            large_content = "# Large File\n\n"
+            for i in range(10000):
+                large_content += f"Line {i}: Some content with pattern-{i} and more text\n"
+                if i % 100 == 0:
+                    large_content += f"```json\n{{\"id\": {i}, \"data\": \"test\"}}\n```\n"
+            
+            (vault_path / "large_file.md").write_text(large_content)
+            
+            # Create small files for comparison
+            for i in range(10):
+                (vault_path / f"small_{i}.md").write_text(f"# Small {i}\npattern-{i}")
+            
+            vault = ObsidianVault(vault_path, use_persistent_index=True)
+            
+            # Force index update
+            await vault._update_search_index()
+            
+            # Time the search
+            start_time = time.time()
+            results = await vault.search_by_regex(r"pattern-\d+", max_results=50)
+            search_time = time.time() - start_time
+            
+            assert len(results) > 0
+            print(f"\nLarge file search took {search_time:.3f} seconds")
+            print(f"Found {len(results)} files with matches")
+            
+            # The search should complete reasonably quickly even with large files
+            assert search_time < 5.0  # Should complete within 5 seconds
+            
+            await vault.close()
+    
+    @pytest.mark.asyncio
+    async def test_fts5_prefiltering(self):
+        """Test FTS5 pre-filtering optimization."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir)
+            
+            # Create files with and without the literal prefix
+            for i in range(20):
+                if i < 10:
+                    content = f"# Note {i}\nThis contains dependencies and react version 18.0.0"
+                else:
+                    content = f"# Note {i}\nThis has no special content"
+                (vault_path / f"note_{i}.md").write_text(content)
+            
+            vault = ObsidianVault(vault_path, use_persistent_index=True)
+            await vault._update_search_index()
+            
+            # Pattern with literal prefix "dependencies"
+            start_time = time.time()
+            results = await vault.search_by_regex(r"dependencies.*react.*18")
+            search_time = time.time() - start_time
+            
+            assert len(results) == 10  # Only files with the pattern
+            print(f"\nFTS5 pre-filtered search took {search_time:.3f} seconds")
+            
+            await vault.close()
+    
+    @pytest.mark.asyncio
+    async def test_parallel_processing(self):
+        """Test parallel file processing."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_path = Path(temp_dir)
+            
+            # Create many medium-sized files
+            for i in range(30):
+                content = f"# File {i}\n\n"
+                for j in range(100):
+                    content += f"Section {j} with test-pattern-{i}-{j}\n"
+                (vault_path / f"file_{i}.md").write_text(content)
+            
+            vault = ObsidianVault(vault_path, use_persistent_index=True)
+            await vault._update_search_index()
+            
+            # Search with a pattern that matches many files
+            start_time = time.time()
+            results = await vault.search_by_regex(r"test-pattern-\d+-\d+", max_results=100)
+            search_time = time.time() - start_time
+            
+            assert len(results) == 30  # All files should match
+            print(f"\nParallel search of {len(results)} files took {search_time:.3f} seconds")
+            
+            # Verify results are properly ordered by score
+            for i in range(1, len(results)):
+                assert results[i-1]['score'] >= results[i]['score']
+            
+            await vault.close()
 
 
 if __name__ == "__main__":

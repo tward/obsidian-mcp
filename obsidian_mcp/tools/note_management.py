@@ -59,10 +59,15 @@ async def read_note(
     except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
     
+    # Return standardized CRUD success structure
     return {
+        "success": True,
         "path": note.path,
-        "content": note.content,
-        "metadata": note.metadata.model_dump(exclude_none=True)
+        "operation": "read",
+        "details": {
+            "content": note.content,
+            "metadata": note.metadata.model_dump(exclude_none=True)
+        }
     }
 
 
@@ -230,10 +235,16 @@ async def create_note(
         note = await vault.write_note(path, content, overwrite=True)
         created = False
     
+    # Return standardized CRUD success structure
     return {
+        "success": True,
         "path": note.path,
-        "created": created,
-        "metadata": note.metadata.model_dump(exclude_none=True)
+        "operation": "created" if created else "overwritten",
+        "details": {
+            "created": created,
+            "overwritten": not created,
+            "metadata": note.metadata.model_dump(exclude_none=True)
+        }
     }
 
 
@@ -301,11 +312,16 @@ async def update_note(
         if create_if_not_exists:
             # Create the note
             note = await vault.write_note(path, content, overwrite=False)
+            # Return standardized CRUD success structure
             return {
+                "success": True,
                 "path": note.path,
-                "updated": False,
-                "created": True,
-                "metadata": note.metadata.model_dump(exclude_none=True)
+                "operation": "created",
+                "details": {
+                    "updated": False,
+                    "created": True,
+                    "metadata": note.metadata.model_dump(exclude_none=True)
+                }
             }
         else:
             raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
@@ -323,12 +339,17 @@ async def update_note(
     # Update existing note
     note = await vault.write_note(path, final_content, overwrite=True)
     
+    # Return standardized CRUD success structure
     return {
+        "success": True,
         "path": note.path,
-        "updated": True,
-        "created": False,
-        "metadata": note.metadata.model_dump(exclude_none=True),
-        "merge_strategy": merge_strategy
+        "operation": "updated",
+        "details": {
+            "updated": True,
+            "created": False,
+            "merge_strategy": merge_strategy,
+            "metadata": note.metadata.model_dump(exclude_none=True)
+        }
     }
 
 
@@ -369,7 +390,12 @@ async def delete_note(path: str, ctx: Optional[Context] = None) -> dict:
     except FileNotFoundError:
         raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=path))
     
+    # Return standardized CRUD success structure
     return {
+        "success": True,
         "path": path,
-        "deleted": True
+        "operation": "deleted",
+        "details": {
+            "deleted": True
+        }
     }

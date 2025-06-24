@@ -1,6 +1,7 @@
 """Search and discovery tools for Obsidian MCP server."""
 
 import re
+import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,9 +16,11 @@ from ..utils.validation import (
 from ..models import VaultItem
 from ..constants import ERROR_MESSAGES
 
+logger = logging.getLogger(__name__)
+
 
 async def _search_by_tag(vault, tag: str, context_length: int) -> List[Dict[str, Any]]:
-    """Search for notes containing a specific tag."""
+    """Search for notes containing a specific tag, supporting hierarchical tags."""
     results = []
     
     # Get all notes
@@ -28,32 +31,58 @@ async def _search_by_tag(vault, tag: str, context_length: int) -> List[Dict[str,
             # Read the note to get its tags
             note = await vault.read_note(note_info["path"])
             
-            # Check if tag is in the note's tags
-            if tag in note.metadata.tags:
-                # Get context around the tag
+            # Check for exact match or hierarchical match
+            # For hierarchical tags, we support:
+            # - Exact match: "parent/child" matches "parent/child"
+            # - Parent match: "parent" matches "parent/child", "parent/grandchild"
+            # - Child match: searching for "child" finds "parent/child"
+            matched = False
+            matching_tags = []
+            
+            for note_tag in note.metadata.tags:
+                # Exact match
+                if note_tag == tag:
+                    matched = True
+                    matching_tags.append(note_tag)
+                # Parent tag match - if searching for "parent", match "parent/child"
+                elif note_tag.startswith(tag + "/"):
+                    matched = True
+                    matching_tags.append(note_tag)
+                # Child tag match - if searching for "child", match "parent/child"
+                elif "/" in note_tag and note_tag.split("/")[-1] == tag:
+                    matched = True
+                    matching_tags.append(note_tag)
+                # Any level match - if searching for "middle", match "parent/middle/child"
+                elif "/" in note_tag and f"/{tag}/" in f"/{note_tag}/":
+                    matched = True
+                    matching_tags.append(note_tag)
+            
+            if matched:
+                # Get context around the tag occurrences
                 content = note.content
-                tag_pattern = f"#{tag}"
-                
-                # Find tag occurrences in content
                 contexts = []
-                idx = 0
-                while True:
-                    idx = content.find(tag_pattern, idx)
-                    if idx == -1:
-                        break
-                    
-                    # Extract context
-                    start = max(0, idx - context_length // 2)
-                    end = min(len(content), idx + len(tag_pattern) + context_length // 2)
-                    context = content[start:end].strip()
-                    contexts.append(context)
-                    idx += 1
+                
+                # Search for all matching tags in content
+                for matched_tag in matching_tags:
+                    tag_pattern = f"#{matched_tag}"
+                    idx = 0
+                    while True:
+                        idx = content.find(tag_pattern, idx)
+                        if idx == -1:
+                            break
+                        
+                        # Extract context
+                        start = max(0, idx - context_length // 2)
+                        end = min(len(content), idx + len(tag_pattern) + context_length // 2)
+                        context = content[start:end].strip()
+                        contexts.append(context)
+                        idx += 1
                 
                 results.append({
                     "path": note.path,
                     "score": 1.0,
-                    "matches": [tag],
-                    "context": " ... ".join(contexts) if contexts else f"Note contains tag: #{tag}"
+                    "matches": matching_tags,
+                    "context": " ... ".join(contexts) if contexts else f"Note contains tags: {', '.join(f'#{t}' for t in matching_tags)}"
                 })
         except Exception:
             # Skip notes we can't read
@@ -99,6 +128,237 @@ async def _search_by_path(vault, path_pattern: str, context_length: int) -> List
     return results
 
 
+def _parse_property_query(query: str) -> Dict[str, Any]:
+    """
+    Parse a property query string into components.
+    
+    Supports formats:
+    - property:name:value (exact match)
+    - property:name:>value (comparison)
+    - property:name:*value* (contains)
+    - property:name:* (exists)
+    
+    Returns:
+        Dict with 'name', 'operator', and 'value'
+    """
+    # Remove 'property:' prefix
+    prop_query = query[9:]  # len('property:') = 9
+    
+    # Split by first colon to separate name from value/operator
+    parts = prop_query.split(':', 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid property query format: {query}")
+    
+    name = parts[0]
+    value_part = parts[1]
+    
+    # Check for operators
+    if value_part == '*':
+        return {'name': name, 'operator': 'exists', 'value': None}
+    elif value_part.startswith('>='):
+        return {'name': name, 'operator': '>=', 'value': value_part[2:]}
+    elif value_part.startswith('<='):
+        return {'name': name, 'operator': '<=', 'value': value_part[2:]}
+    elif value_part.startswith('!='):
+        return {'name': name, 'operator': '!=', 'value': value_part[2:]}
+    elif value_part.startswith('>'):
+        return {'name': name, 'operator': '>', 'value': value_part[1:]}
+    elif value_part.startswith('<'):
+        return {'name': name, 'operator': '<', 'value': value_part[1:]}
+    elif value_part.startswith('*') and value_part.endswith('*'):
+        return {'name': name, 'operator': 'contains', 'value': value_part[1:-1]}
+    else:
+        return {'name': name, 'operator': '=', 'value': value_part}
+
+
+async def _search_by_property(vault, property_query: str, context_length: int) -> List[Dict[str, Any]]:
+    """Search for notes by property values."""
+    # Parse the property query
+    try:
+        parsed = _parse_property_query(property_query)
+    except ValueError as e:
+        raise ValueError(str(e))
+    
+    prop_name = parsed['name']
+    operator = parsed['operator']
+    value = parsed['value']
+    
+    # Check if we can use the persistent index for property search
+    if hasattr(vault, 'persistent_index') and vault.persistent_index:
+        try:
+            # Use persistent index for efficient property search
+            results_from_index = await vault.persistent_index.search_by_property(
+                prop_name, operator, value, 200  # Get more results to filter
+            )
+            
+            results = []
+            for file_info in results_from_index:
+                filepath = file_info['filepath']
+                content = file_info['content']
+                prop_value = file_info['property_value']
+                
+                # Create context showing the property
+                context = f"{prop_name}: {prop_value}"
+                if content:
+                    # Add some note content too
+                    content_preview = content[:context_length].strip()
+                    if len(content) > context_length:
+                        content_preview += "..."
+                    context = f"{context}\n\n{content_preview}"
+                
+                results.append({
+                    "path": filepath,
+                    "score": 1.0,
+                    "matches": [f"{prop_name} {operator} {value if value else 'exists'}"],
+                    "context": context,
+                    "property_value": prop_value
+                })
+            
+            return results
+        except Exception as e:
+            # Fall back to manual search if index fails
+            logger.warning(f"Property search via index failed: {e}, falling back to manual search")
+    
+    # Fall back to manual search (original implementation)
+    results = []
+    all_notes = await vault.list_notes(recursive=True)
+    
+    for note_info in all_notes:
+        try:
+            # Read note to get metadata
+            note = await vault.read_note(note_info["path"])
+            
+            # Get the property value from frontmatter
+            frontmatter = note.metadata.frontmatter
+            if prop_name not in frontmatter:
+                # Property doesn't exist
+                if operator == 'exists':
+                    continue  # Skip since we want it to exist
+                else:
+                    continue  # Skip since property is not present
+            
+            prop_value = frontmatter[prop_name]
+            
+            # Check if property exists (special case)
+            if operator == 'exists':
+                matches = True
+            # Handle comparison operators
+            elif operator == '=':
+                # Handle array/list properties
+                if isinstance(prop_value, list):
+                    # Check if value is in the list
+                    matches = any(str(item).lower() == str(value).lower() for item in prop_value)
+                else:
+                    matches = str(prop_value).lower() == str(value).lower()
+            elif operator == '!=':
+                if isinstance(prop_value, list):
+                    # Check if value is NOT in the list
+                    matches = not any(str(item).lower() == str(value).lower() for item in prop_value)
+                else:
+                    matches = str(prop_value).lower() != str(value).lower()
+            elif operator == 'contains':
+                if isinstance(prop_value, list):
+                    # Check if any item in list contains the value
+                    matches = any(str(value).lower() in str(item).lower() for item in prop_value)
+                else:
+                    matches = str(value).lower() in str(prop_value).lower()
+            elif operator in ['>', '<', '>=', '<=']:
+                # For arrays, compare the length
+                if isinstance(prop_value, list):
+                    try:
+                        num_prop = len(prop_value)
+                        num_val = float(value)
+                        if operator == '>':
+                            matches = num_prop > num_val
+                        elif operator == '<':
+                            matches = num_prop < num_val
+                        elif operator == '>=':
+                            matches = num_prop >= num_val
+                        elif operator == '<=':
+                            matches = num_prop <= num_val
+                    except (ValueError, TypeError):
+                        matches = False
+                else:
+                    # Try date/datetime comparison first
+                    try:
+                        # Try common date formats
+                        date_prop = None
+                        date_val = None
+                        
+                        # Try ISO format first (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+                        for fmt in ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]:
+                            try:
+                                date_prop = datetime.strptime(str(prop_value), fmt)
+                                date_val = datetime.strptime(str(value), fmt)
+                                break
+                            except:
+                                continue
+                        
+                        if date_prop and date_val:
+                            if operator == '>':
+                                matches = date_prop > date_val
+                            elif operator == '<':
+                                matches = date_prop < date_val
+                            elif operator == '>=':
+                                matches = date_prop >= date_val
+                            elif operator == '<=':
+                                matches = date_prop <= date_val
+                        else:
+                            raise ValueError("Not a date")
+                    except:
+                        # Try numeric comparison
+                        try:
+                            num_prop = float(prop_value)
+                            num_val = float(value)
+                            if operator == '>':
+                                matches = num_prop > num_val
+                            elif operator == '<':
+                                matches = num_prop < num_val
+                            elif operator == '>=':
+                                matches = num_prop >= num_val
+                            elif operator == '<=':
+                                matches = num_prop <= num_val
+                        except (ValueError, TypeError):
+                            # Fall back to string comparison
+                            if operator == '>':
+                                matches = str(prop_value) > str(value)
+                            elif operator == '<':
+                                matches = str(prop_value) < str(value)
+                            elif operator == '>=':
+                                matches = str(prop_value) >= str(value)
+                            elif operator == '<=':
+                                matches = str(prop_value) <= str(value)
+            else:
+                matches = False
+            
+            if matches:
+                # Create context showing the property
+                if isinstance(prop_value, list):
+                    # Format list values nicely
+                    context = f"{prop_name}: [{', '.join(str(v) for v in prop_value)}]"
+                else:
+                    context = f"{prop_name}: {prop_value}"
+                if note.content:
+                    # Add some note content too
+                    content_preview = note.content[:context_length].strip()
+                    if len(note.content) > context_length:
+                        content_preview += "..."
+                    context = f"{context}\n\n{content_preview}"
+                
+                results.append({
+                    "path": note.path,
+                    "score": 1.0,
+                    "matches": [f"{prop_name} {operator} {value if value else 'exists'}"],
+                    "context": context,
+                    "property_value": prop_value
+                })
+        except Exception:
+            # Skip notes we can't read
+            continue
+    
+    return results
+
+
 async def search_notes(
     query: str,
     context_length: int = 100,
@@ -107,7 +367,7 @@ async def search_notes(
     """
     Search for notes containing specific text or matching search criteria.
     
-    Use this tool to find notes by content, title, or metadata. Supports
+    Use this tool to find notes by content, title, metadata, or properties. Supports
     multiple search modes with special prefixes:
     
     Search Syntax:
@@ -118,10 +378,25 @@ async def search_notes(
       Example: "path:Note with Images" finds notes with this in their filename
     - Tag search: Use "tag:" prefix to search by tags
       Example: "tag:project" or "tag:#project" finds notes with the project tag
+    - Property search: Use "property:" prefix to search by frontmatter properties
+      Example: "property:status:active" finds notes where status = active
+      Example: "property:priority:>2" finds notes where priority > 2
+      Example: "property:assignee:*john*" finds notes where assignee contains "john"
+      Example: "property:deadline:*" finds notes that have a deadline property
     - Combined searches are supported but limited to one mode at a time
     
+    Property Operators:
+    - ":" or "=" for exact match (property:name:value)
+    - ">" for greater than (property:priority:>3)
+    - "<" for less than (property:age:<30)
+    - ">=" for greater or equal (property:score:>=80)
+    - "<=" for less or equal (property:rating:<=5)
+    - "!=" for not equal (property:status:!=completed)
+    - "*value*" for contains (property:title:*project*)
+    - "*" for exists (property:tags:*)
+    
     Args:
-        query: Search query with optional prefix (path:, tag:, or plain text)
+        query: Search query with optional prefix (path:, tag:, property:, or plain text)
         context_length: Number of characters to show around matches (default: 100)
         ctx: MCP context for progress reporting
         
@@ -137,6 +412,10 @@ async def search_notes(
         
         >>> # Search by tag
         >>> await search_notes("tag:important", ctx=ctx)
+        
+        >>> # Search by property
+        >>> await search_notes("property:status:active", ctx=ctx)
+        >>> await search_notes("property:priority:>2", ctx=ctx)
     """
     # Validate parameters
     is_valid, error = validate_search_query(query)
@@ -162,22 +441,37 @@ async def search_notes(
             # Path search
             path_pattern = query[5:]
             results = await _search_by_path(vault, path_pattern, context_length)
+        elif query.startswith("property:"):
+            # Property search
+            results = await _search_by_property(vault, query, context_length)
         else:
             # Regular content search
             results = await vault.search_notes(query, context_length)
         
+        # Return standardized search results structure
         return {
-            "query": query,
+            "results": results,
             "count": len(results),
-            "results": results
+            "query": {
+                "text": query,
+                "context_length": context_length,
+                "type": "tag" if query.startswith("tag:") else "path" if query.startswith("path:") else "property" if query.startswith("property:") else "content"
+            },
+            "truncated": False  # We don't have a hard limit on results currently
         }
     except Exception as e:
         if ctx:
             ctx.info(f"Search failed: {str(e)}")
+        # Return standardized error structure
         return {
-            "query": query,
-            "count": 0,
             "results": [],
+            "count": 0,
+            "query": {
+                "text": query,
+                "context_length": context_length,
+                "type": "tag" if query.startswith("tag:") else "path" if query.startswith("path:") else "property" if query.startswith("property:") else "content"
+            },
+            "truncated": False,
             "error": f"Search failed: {str(e)}"
         }
 
@@ -252,8 +546,8 @@ async def search_by_date(
         for note_info in all_notes:
             note_path = note_info["path"]
             
-            # Get file stats
-            full_path = vault._ensure_safe_path(note_path)
+            # Get file stats (use lenient path validation for existing files)
+            full_path = vault._get_absolute_path(note_path)
             stat = full_path.stat()
             
             # Get the appropriate timestamp
@@ -286,20 +580,146 @@ async def search_by_date(
         # Sort by date (most recent first)
         formatted_results.sort(key=lambda x: x["date"], reverse=True)
         
+        # Return standardized search results structure
         return {
-            "query": query_description,
+            "results": formatted_results,
             "count": len(formatted_results),
-            "results": formatted_results
+            "query": {
+                "date_type": date_type,
+                "days_ago": days_ago,
+                "operator": operator,
+                "description": query_description
+            },
+            "truncated": False
         }
         
     except Exception as e:
         if ctx:
             ctx.info(f"Date search failed: {str(e)}")
+        # Return standardized error structure
         return {
-            "query": query_description,
-            "count": 0,
             "results": [],
+            "count": 0,
+            "query": {
+                "date_type": date_type,
+                "days_ago": days_ago,
+                "operator": operator,
+                "description": query_description
+            },
+            "truncated": False,
             "error": f"Date-based search failed: {str(e)}"
+        }
+
+
+async def search_by_property(
+    property_name: str,
+    value: Optional[str] = None,
+    operator: str = "=",
+    context_length: int = 100,
+    ctx=None
+) -> dict:
+    """
+    Search for notes by their frontmatter property values.
+    
+    This tool allows advanced filtering of notes based on YAML frontmatter properties,
+    supporting various comparison operators and data types.
+    
+    Args:
+        property_name: Name of the property to search for
+        value: Value to compare against (optional for 'exists' operator)
+        operator: Comparison operator (=, !=, >, <, >=, <=, contains, exists)
+        context_length: Characters of note content to include in results
+        ctx: MCP context for progress reporting
+        
+    Operators:
+    - "=" or "equals": Exact match (case-insensitive)
+    - "!=": Not equal
+    - ">": Greater than (numeric/date comparison)
+    - "<": Less than (numeric/date comparison)
+    - ">=": Greater or equal
+    - "<=": Less or equal
+    - "contains": Property value contains the search value
+    - "exists": Property exists (value parameter ignored)
+    
+    Returns:
+        Dictionary with search results including property values
+        
+    Examples:
+        >>> # Find all notes with status = "active"
+        >>> await search_by_property("status", "active", "=")
+        
+        >>> # Find notes with priority > 2
+        >>> await search_by_property("priority", "2", ">")
+        
+        >>> # Find notes that have a deadline property
+        >>> await search_by_property("deadline", operator="exists")
+        
+        >>> # Find notes where title contains "project"
+        >>> await search_by_property("title", "project", "contains")
+    """
+    if ctx:
+        ctx.info(f"Searching by property: {property_name} {operator} {value}")
+    
+    # Validate operator
+    valid_operators = ["=", "equals", "!=", ">", "<", ">=", "<=", "contains", "exists"]
+    if operator not in valid_operators:
+        raise ValueError(f"Invalid operator: {operator}. Must be one of: {', '.join(valid_operators)}")
+    
+    # Normalize operator
+    if operator == "equals":
+        operator = "="
+    
+    # Build query string for internal function
+    if operator == "exists":
+        query = f"property:{property_name}:*"
+    elif operator == "contains":
+        query = f"property:{property_name}:*{value}*"
+    elif operator in [">", "<", ">=", "<=", "!="]:
+        query = f"property:{property_name}:{operator}{value}"
+    else:  # = operator
+        query = f"property:{property_name}:{value}"
+    
+    vault = get_vault()
+    
+    try:
+        results = await _search_by_property(vault, query, context_length)
+        
+        # Sort results by property value if numeric
+        if results and operator in [">", "<", ">=", "<="]:
+            try:
+                # Try to sort numerically
+                results.sort(key=lambda x: float(x.get("property_value", 0)), reverse=(operator in [">", ">="]))
+            except:
+                # Fall back to string sort
+                results.sort(key=lambda x: str(x.get("property_value", "")))
+        
+        # Return standardized search results structure
+        return {
+            "results": results,
+            "count": len(results),
+            "query": {
+                "property": property_name,
+                "operator": operator,
+                "value": value,
+                "context_length": context_length
+            },
+            "truncated": False
+        }
+    except Exception as e:
+        if ctx:
+            ctx.info(f"Property search failed: {str(e)}")
+        # Return standardized error structure
+        return {
+            "results": [],
+            "count": 0,
+            "query": {
+                "property": property_name,
+                "operator": operator,
+                "value": value,
+                "context_length": context_length
+            },
+            "truncated": False,
+            "error": f"Property search failed: {str(e)}"
         }
 
 
@@ -351,20 +771,26 @@ async def list_notes(
     try:
         notes = await vault.list_notes(directory, recursive)
         
+        # Return standardized list results structure
         return {
-            "directory": directory or "/",
-            "recursive": recursive,
-            "count": len(notes),
-            "notes": notes
+            "items": notes,
+            "total": len(notes),
+            "scope": {
+                "directory": directory or "vault root",
+                "recursive": recursive
+            }
         }
     except Exception as e:
         if ctx:
             ctx.info(f"Failed to list notes: {str(e)}")
+        # Return standardized error structure
         return {
-            "directory": directory or "/",
-            "recursive": recursive,
-            "count": 0,
-            "notes": [],
+            "items": [],
+            "total": 0,
+            "scope": {
+                "directory": directory or "vault root",
+                "recursive": recursive
+            },
             "error": f"Failed to list notes: {str(e)}"
         }
 
@@ -457,20 +883,26 @@ async def list_folders(
         # Sort by path
         folders.sort(key=lambda x: x["path"])
         
+        # Return standardized list results structure
         return {
-            "directory": directory or "/",
-            "recursive": recursive,
-            "count": len(folders),
-            "folders": folders
+            "items": folders,
+            "total": len(folders),
+            "scope": {
+                "directory": directory or "vault root",
+                "recursive": recursive
+            }
         }
     except Exception as e:
         if ctx:
             ctx.info(f"Failed to list folders: {str(e)}")
+        # Return standardized error structure
         return {
-            "directory": directory or "/",
-            "recursive": recursive,
-            "count": 0,
-            "folders": [],
+            "items": [],
+            "total": 0,
+            "scope": {
+                "directory": directory or "vault root",
+                "recursive": recursive
+            },
             "error": f"Failed to list folders: {str(e)}"
         }
 
@@ -609,11 +1041,17 @@ async def search_by_regex(
             
             formatted_results.append(formatted_result)
         
+        # Return standardized search results structure
         return {
-            "pattern": pattern,
-            "flags": flags or [],
+            "results": formatted_results,
             "count": len(formatted_results),
-            "results": formatted_results
+            "query": {
+                "pattern": pattern,
+                "flags": flags or [],
+                "context_length": context_length,
+                "max_results": max_results
+            },
+            "truncated": len(results) == max_results  # True if we hit the limit
         }
         
     except ValueError as e:
@@ -622,10 +1060,16 @@ async def search_by_regex(
     except Exception as e:
         if ctx:
             ctx.info(f"Regex search failed: {str(e)}")
+        # Return standardized error structure
         return {
-            "pattern": pattern,
-            "flags": flags or [],
-            "count": 0,
             "results": [],
+            "count": 0,
+            "query": {
+                "pattern": pattern,
+                "flags": flags or [],
+                "context_length": context_length,
+                "max_results": max_results
+            },
+            "truncated": False,
             "error": f"Regex search failed: {str(e)}"
         }

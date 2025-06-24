@@ -87,11 +87,16 @@ async def move_note(
     # Delete original note
     await vault.delete_note(source_path)
     
+    # Return standardized move operation structure
     return {
+        "success": True,
         "source": source_path,
         "destination": destination_path,
-        "moved": True,
-        "links_updated": links_updated
+        "type": "note",
+        "details": {
+            "items_moved": 1,
+            "links_updated": links_updated
+        }
     }
 
 
@@ -108,7 +113,7 @@ async def create_folder(
     file. It will create all necessary parent folders in the path.
     
     Args:
-        folder_path: Path of the folder to create (e.g., "Apple/Studies/J71P")
+        folder_path: Path of the folder to create (e.g., "Research/Studies/2024")
         create_placeholder: Whether to create a placeholder file (default: true)
         ctx: MCP context for progress reporting
         
@@ -116,12 +121,12 @@ async def create_folder(
         Dictionary containing creation status
         
     Example:
-        >>> await create_folder("Apple/Studies/J71P", ctx=ctx)
+        >>> await create_folder("Research/Studies/2024", ctx=ctx)
         {
-            "folder": "Apple/Studies/J71P",
+            "folder": "Research/Studies/2024",
             "created": true,
-            "placeholder_file": "Apple/Studies/J71P/.gitkeep",
-            "folders_created": ["Apple", "Apple/Studies", "Apple/Studies/J71P"]
+            "placeholder_file": "Research/Studies/2024/.gitkeep",
+            "folders_created": ["Research", "Research/Studies", "Research/Studies/2024"]
         }
     """
     # Validate folder path
@@ -166,20 +171,30 @@ async def create_folder(
     
     if not folders_created and not create_placeholder:
         # All folders already exist
+        # Return standardized CRUD success structure
         return {
-            "folder": folder_path,
-            "created": False,
-            "message": "All folders in path already exist",
-            "folders_created": []
+            "success": True,
+            "path": folder_path,
+            "operation": "exists",
+            "details": {
+                "created": False,
+                "message": "All folders in path already exist",
+                "folders_created": []
+            }
         }
     
     if not create_placeholder:
+        # Return standardized CRUD success structure
         return {
-            "folder": folder_path,
-            "created": True,
-            "message": "Folders will be created when first note is added",
-            "placeholder_file": None,
-            "folders_created": folders_created
+            "success": True,
+            "path": folder_path,
+            "operation": "created",
+            "details": {
+                "created": True,
+                "message": "Folders will be created when first note is added",
+                "placeholder_file": None,
+                "folders_created": folders_created
+            }
         }
     
     # Create a placeholder file in the deepest folder to establish the entire path
@@ -188,11 +203,16 @@ async def create_folder(
     
     try:
         await vault.write_note(placeholder_path, placeholder_content, overwrite=False)
+        # Return standardized CRUD success structure
         return {
-            "folder": folder_path,
-            "created": True,
-            "placeholder_file": placeholder_path,
-            "folders_created": folders_created if folders_created else ["(all already existed)"]
+            "success": True,
+            "path": folder_path,
+            "operation": "created",
+            "details": {
+                "created": True,
+                "placeholder_file": placeholder_path,
+                "folders_created": folders_created if folders_created else ["(all already existed)"]
+            }
         }
     except Exception as e:
         # Try with README.md if .gitkeep fails
@@ -200,11 +220,16 @@ async def create_folder(
             readme_path = f"{folder_path}/README.md"
             readme_content = f"# {folder_path.split('/')[-1]}\n\nThis folder contains notes related to {folder_path.replace('/', ' > ')}.\n"
             await vault.write_note(readme_path, readme_content, overwrite=False)
+            # Return standardized CRUD success structure
             return {
-                "folder": folder_path,
-                "created": True,
-                "placeholder_file": readme_path,
-                "folders_created": folders_created if folders_created else ["(all already existed)"]
+                "success": True,
+                "path": folder_path,
+                "operation": "created",
+                "details": {
+                    "created": True,
+                    "placeholder_file": readme_path,
+                    "folders_created": folders_created if folders_created else ["(all already existed)"]
+                }
             }
         except Exception as e2:
             raise ValueError(f"Failed to create folder: {str(e2)}")
@@ -312,18 +337,23 @@ async def move_folder(
         # and updating them. For now, we'll mark this as a future enhancement.
         pass
     
+    # Return standardized move operation structure
     result = {
+        "success": True,
         "source": source_folder,
         "destination": destination_folder,
-        "moved": True,
-        "notes_moved": notes_moved,
-        "folders_moved": len(folders_moved),
-        "links_updated": links_updated
+        "type": "folder",
+        "details": {
+            "items_moved": notes_moved,
+            "links_updated": links_updated,
+            "notes_moved": notes_moved,
+            "folders_moved": len(folders_moved)
+        }
     }
     
     if errors:
-        result["errors"] = errors[:5]  # Limit to first 5 errors
-        result["total_errors"] = len(errors)
+        result["details"]["errors"] = errors[:5]  # Limit to first 5 errors
+        result["details"]["total_errors"] = len(errors)
     
     return result
 
@@ -390,10 +420,19 @@ async def add_tags(
     # Get updated note to return current tags
     updated_note = await vault.read_note(path)
     
+    # Return standardized tag operation structure
     return {
+        "success": True,
         "path": path,
-        "tags_added": tags,
-        "all_tags": updated_note.metadata.tags
+        "operation": "added",
+        "tags": {
+            "before": note.metadata.tags if note.metadata.tags else [],
+            "after": updated_note.metadata.tags,
+            "changes": {
+                "added": tags,
+                "removed": []
+            }
+        }
     }
 
 
@@ -473,11 +512,24 @@ async def update_tags(
     # Update the note
     await vault.write_note(path, updated_content, overwrite=True)
     
+    # Return standardized tag operation structure
+    added_tags = list(set(final_tags) - set(previous_tags)) if merge else final_tags
+    removed_tags = list(set(previous_tags) - set(final_tags)) if not merge else []
+    
     return {
+        "success": True,
         "path": path,
-        "previous_tags": previous_tags,
-        "new_tags": final_tags,
-        "operation": operation
+        "operation": "updated",
+        "tags": {
+            "before": previous_tags,
+            "after": final_tags,
+            "changes": {
+                "added": added_tags,
+                "removed": removed_tags,
+                "merge_mode": merge,
+                "operation_type": operation
+            }
+        }
     }
 
 
@@ -542,10 +594,19 @@ async def remove_tags(
     # Get updated note to return current tags
     updated_note = await vault.read_note(path)
     
+    # Return standardized tag operation structure
     return {
+        "success": True,
         "path": path,
-        "tags_removed": tags,
-        "remaining_tags": updated_note.metadata.tags
+        "operation": "removed",
+        "tags": {
+            "before": note.metadata.tags if note.metadata.tags else [],
+            "after": updated_note.metadata.tags if updated_note.metadata.tags else [],
+            "changes": {
+                "added": [],
+                "removed": tags
+            }
+        }
     }
 
 
@@ -599,9 +660,15 @@ async def get_note_info(
     try:
         note = await vault.read_note(path)
     except FileNotFoundError:
+        # Return standardized CRUD structure for non-existent note
         return {
+            "success": False,
             "path": path,
-            "exists": False
+            "operation": "read",
+            "details": {
+                "exists": False,
+                "error": "Note not found"
+            }
         }
     
     # Calculate statistics
@@ -613,14 +680,19 @@ async def get_note_info(
     markdown_link_count = len(re.findall(r'\[([^\]]+)\]\(([^)]+)\)', content))
     link_count = wikilink_count + markdown_link_count
     
+    # Return standardized CRUD success structure
     return {
+        "success": True,
         "path": path,
-        "exists": True,
-        "metadata": note.metadata.model_dump(exclude_none=True),
-        "stats": {
-            "size_bytes": len(content.encode('utf-8')),
-            "word_count": word_count,
-            "link_count": link_count
+        "operation": "read",
+        "details": {
+            "exists": True,
+            "metadata": note.metadata.model_dump(exclude_none=True),
+            "stats": {
+                "size_bytes": len(content.encode('utf-8')),
+                "word_count": word_count,
+                "link_count": link_count
+            }
         }
     }
 
@@ -799,9 +871,14 @@ async def list_tags(
             # Just return tag names sorted
             tags = sorted(tag_counts.keys(), key=str.lower)
         
+        # Return standardized list results structure
         return {
-            "total_tags": len(tag_counts),
-            "tags": tags
+            "items": tags,
+            "total": len(tag_counts),
+            "scope": {
+                "include_counts": include_counts,
+                "sort_by": sort_by
+            }
         }
         
     except Exception as e:

@@ -337,10 +337,18 @@ async def get_backlinks(
     if ctx:
         ctx.info(f"Found {len(backlinks)} backlinks")
     
+    # Return standardized analysis results structure
     return {
-        'target_note': path,
-        'backlink_count': len(backlinks),
-        'backlinks': backlinks
+        'findings': backlinks,
+        'summary': {
+            'backlink_count': len(backlinks),
+            'sources': len(set(bl['source_path'] for bl in backlinks))  # Unique source notes
+        },
+        'target': path,
+        'scope': {
+            'include_context': include_context,
+            'context_length': context_length
+        }
     }
 
 
@@ -415,10 +423,18 @@ async def get_outgoing_links(
     if ctx:
         ctx.info(f"Found {len(links)} outgoing links")
     
+    # Return standardized analysis results structure
     return {
-        'source_note': path,
-        'link_count': len(links),
-        'links': links
+        'findings': links,
+        'summary': {
+            'link_count': len(links),
+            'checked_validity': check_validity,
+            'broken_count': len([l for l in links if check_validity and not l.get('exists', True)])
+        },
+        'target': path,
+        'scope': {
+            'check_validity': check_validity
+        }
     }
 
 
@@ -546,18 +562,17 @@ async def find_broken_links(
     # Sort broken links by source path
     broken_links.sort(key=lambda x: x['source_path'])
     
-    result = {
-        'broken_link_count': len(broken_links),
-        'affected_notes': len(affected_notes_set),
-        'broken_links': broken_links
+    # Return standardized analysis results structure
+    return {
+        'findings': broken_links,
+        'summary': {
+            'broken_link_count': len(broken_links),
+            'affected_notes': len(affected_notes_set),
+            'notes_checked': len(notes_to_check)
+        },
+        'target': single_note if single_note else directory or 'vault',
+        'scope': {
+            'type': 'single_note' if single_note else 'directory' if directory else 'vault',
+            'path': single_note if single_note else directory if directory else '/'
+        }
     }
-    
-    # Add context about what was checked
-    if single_note:
-        result['checked'] = 'single_note'
-        result['note'] = single_note
-    else:
-        result['checked'] = 'directory'
-        result['directory'] = directory or '/'
-    
-    return result

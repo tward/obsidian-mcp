@@ -11,7 +11,7 @@ from ..constants import ERROR_MESSAGES
 async def read_image(
     path: str,
     include_metadata: bool = False,
-    max_width: int = 800,
+    max_width: int = 1600,
     ctx: Optional[Context] = None
 ) -> Union[Image, Dict[str, Any]]:
     """
@@ -24,7 +24,7 @@ async def read_image(
     Args:
         path: Path to the image file relative to vault root (e.g., "attachments/screenshot.png")
         include_metadata: Whether to include file metadata (returns dict with image and metadata)
-        max_width: Maximum width for automatic resizing in pixels (default: 800)
+        max_width: Maximum width for automatic resizing in pixels (default: 1600)
         ctx: MCP context for progress reporting
         
     Returns:
