@@ -25,6 +25,7 @@ A Model Context Protocol (MCP) server that enables AI assistants like Claude to 
 - 📁 **Browse vault** - List and navigate your notes and folders by directory
 - 🏷️ **Tag management** - Add, remove, and organize tags (supports hierarchical tags, frontmatter, and inline tags)
 - 🔗 **Link management** - Find backlinks, analyze outgoing links, and identify broken links
+- ✏️ **Smart rename** - Rename notes with automatic link updates throughout your vault
 - 📊 **Note insights** - Get statistics like word count and link analysis
 - 🎯 **AI-optimized** - Clear error messages and smart defaults for better AI interactions
 - 🔒 **Secure** - Direct filesystem access with path validation
@@ -566,7 +567,42 @@ Move a note to a new location.
 **Parameters:**
 - `source_path`: Current path of the note
 - `destination_path`: New path for the note
-- `update_links` (default: `true`): Update links in other notes (future enhancement)
+- `update_links` (deprecated): Has no effect - wiki links work by note name
+
+**Note:** Since Obsidian uses wiki-style links (`[[Note Name]]`) that reference notes by name rather than path, links continue to work after moving notes to different folders.
+
+#### `rename_note`
+Rename a note and automatically update all references to it throughout your vault.
+
+**Parameters:**
+- `old_path`: Current path of the note
+- `new_path`: New path for the note (must be in same directory)
+- `update_links` (default: `true`): Automatically update all wiki-style links
+
+**Returns:**
+```json
+{
+  "success": true,
+  "old_path": "Projects/Old Name.md",
+  "new_path": "Projects/New Name.md",
+  "operation": "renamed",
+  "details": {
+    "links_updated": 12,
+    "notes_updated": 8,
+    "link_update_details": [
+      {"note": "Daily/2024-01-15.md", "updates": 2},
+      {"note": "Ideas/Related.md", "updates": 1}
+    ]
+  }
+}
+```
+
+**Features:**
+- Automatically finds and updates all `[[wiki-style links]]` to the renamed note
+- Preserves link aliases (e.g., `[[Old Name|Display Text]]` → `[[New Name|Display Text]]`)
+- Handles various link formats: `[[Note]]`, `[[Note.md]]`, `[[Note|Alias]]`
+- Shows which notes were updated for transparency
+- Can only rename within the same directory (use `move_note` to change directories)
 
 #### `move_folder`
 Move an entire folder and all its contents to a new location.

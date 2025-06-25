@@ -17,6 +17,7 @@ from .search_discovery import (
 )
 from .organization import (
     move_note,
+    rename_note,
     create_folder,
     move_folder,
     add_tags,
@@ -53,6 +54,7 @@ __all__ = [
     "list_folders",
     # Organization
     "move_note",
+    "rename_note",
     "create_folder",
     "move_folder",
     "add_tags",

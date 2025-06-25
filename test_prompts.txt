@@ -1,0 +1,58 @@
+# Obsidian MCP Test Prompts
+# These prompts test various tools and features of the Obsidian MCP server
+# Any created notes will be placed in the MCP_TESTS folder
+
+## 1. Complex Search with Multiple Criteria
+Search for notes that mention "project" or "task" and were modified in the last 30 days. Show me notes that contain these terms in different contexts (tags, content, properties). Then search specifically for notes tagged with hierarchical tags starting with "project" (like project/web, project/mobile).
+
+## 2. Create and Edit a Structured Note
+Create a new note at "MCP_TESTS/Project Tracker.md" with the following structure:
+- A main heading "# Project Tracker"
+- Sections for "## Active Projects", "## Completed Projects", and "## Ideas"
+- Add some sample content to each section
+Then use edit_note_section to add a new project to the "## Active Projects" section without rewriting the whole note.
+
+## 3. Property Search and Metadata Analysis
+Search for notes that have a "status" property set to "active" or "in-progress". Then search for notes with a "priority" property greater than 3. Also find notes that have a "date" or "due" property set to any value (using the exists operator).
+
+## 4. Link Analysis and Broken Link Detection
+Pick any note that seems to be well-connected (has multiple links) and analyze its backlinks and outgoing links. Then run a broken link check on your entire vault to identify any broken internal links. If you find broken links, tell me which notes contain them.
+
+## 5. Tag Management and Organization
+List all unique tags in my vault sorted by usage count. Then create a new note "MCP_TESTS/Tag Test.md" and add multiple tags including hierarchical ones like "test/mcp/validation". Update the tags on this note by adding more tags, then remove specific ones to test tag manipulation.
+
+## 6. Regex Pattern Search
+Use regex search to find:
+- All notes containing URLs (pattern: https?://[^\s]+)
+- Notes with markdown checkboxes that are unchecked (pattern: - \[ \])
+- Notes containing code blocks (pattern: ```[\s\S]*?```)
+Show me a few examples of what you found with context.
+
+## 7. Folder Operations and Bulk Management
+Create a folder structure "MCP_TESTS/Archive/2024/Q1" (testing deep folder creation). Then create a few test notes in "MCP_TESTS/TestFolder/". After that, move the entire "MCP_TESTS/TestFolder" to "MCP_TESTS/Archive/2024/Q1/TestFolder" to test folder moving with contents.
+
+## 8. Daily Note Workflow with Section Editing
+Create a daily note "MCP_TESTS/Daily/2024-01-15.md" with sections for "## Tasks", "## Notes", and "## Reflections". Then:
+- Append a task to the end of the note using update_note with append strategy
+- Add specific items to the "## Tasks" section using edit_note_section
+- Insert a timestamp before the "## Reflections" section
+
+## 9. Image Analysis and Note Enhancement
+Search for notes that contain images (look for ![...](...) patterns). For any note you find with images, read the note and view its embedded images. Describe what you see in the images and suggest how the note could be enhanced based on the visual content.
+
+## 10. Advanced Multi-Tool Workflow
+Create a comprehensive project documentation:
+1. Create "MCP_TESTS/Project Documentation.md" with sections for Overview, Status, Tasks, and Resources
+2. Search your vault for any existing notes about "documentation" or "readme" to gather context
+3. Add relevant backlinks to the new note
+4. Use edit_note_section to progressively build out each section
+5. Add appropriate tags based on the content
+6. Finally, get comprehensive info about the note (metadata, word count, link count) to verify it was created correctly
+
+## 11. Smart Note Renaming with Link Updates
+Test the rename_note functionality:
+1. Create a note "MCP_TESTS/Old Project Name.md" with some content
+2. Create 2-3 other notes in "MCP_TESTS/References/" that link to "Old Project Name" using different formats: [[Old Project Name]], [[Old Project Name|my project]], [[Old Project Name.md]]
+3. Use rename_note to rename "MCP_TESTS/Old Project Name.md" to "MCP_TESTS/New Project Name.md"
+4. Verify that all links in the reference notes were automatically updated
+5. Show me the link update details to confirm which notes were modified

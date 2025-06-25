@@ -28,6 +28,7 @@ from .tools import (
     list_notes,
     list_folders,
     move_note,
+    rename_note,
     create_folder,
     move_folder,
     add_tags,
@@ -637,6 +638,57 @@ async def move_note_tool(
         raise ToolError(str(e))
     except Exception as e:
         raise ToolError(f"Failed to move note: {str(e)}")
+
+@mcp.tool()
+async def rename_note_tool(
+    old_path: Annotated[str, Field(
+        description="Current path of the note to rename",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Projects/Old Name.md", "Ideas/Temporary Title.md"]
+    )],
+    new_path: Annotated[str, Field(
+        description="New path for the note (must be in same directory)",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Projects/New Name.md", "Ideas/Final Title.md"]
+    )],
+    update_links: Annotated[bool, Field(
+        description="Automatically update all [[wiki links]] to this note across the vault",
+        default=True
+    )] = True,
+    ctx=None
+):
+    """
+    Rename a note and automatically update all references to it.
+    
+    When to use:
+    - Changing a note's title to better reflect its content
+    - Fixing typos in note names
+    - Standardizing naming conventions
+    - Updating temporary names to permanent ones
+    
+    When NOT to use:
+    - Moving notes to different folders (use move_note)
+    - Creating a copy with new name (use read_note + create_note)
+    
+    Important:
+    - Can only rename within the same directory
+    - Automatically updates all [[wiki-style links]] throughout vault
+    - Preserves link aliases like [[old name|display text]]
+    - Shows which notes were updated for transparency
+    
+    Returns:
+        Rename confirmation with link update details
+    """
+    try:
+        return await rename_note(old_path, new_path, update_links, ctx)
+    except (ValueError, FileNotFoundError, FileExistsError) as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(f"Failed to rename note: {str(e)}")
 
 @mcp.tool()
 async def create_folder_tool(
