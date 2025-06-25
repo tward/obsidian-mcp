@@ -19,6 +19,7 @@ from .tools import (
     read_note,
     create_note,
     update_note,
+    edit_note_section,
     delete_note,
     search_notes,
     search_by_date,
@@ -189,6 +190,73 @@ async def update_note_tool(
         raise ToolError(str(e))
     except Exception as e:
         raise ToolError(f"Failed to update note: {str(e)}")
+
+@mcp.tool()
+async def edit_note_section_tool(
+    path: Annotated[str, Field(
+        description="Path to the note to edit",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Daily/2024-01-15.md", "Projects/Project.md"]
+    )],
+    section_identifier: Annotated[str, Field(
+        description="Markdown heading that identifies the section (e.g., '## Tasks', '### Status')",
+        pattern=r"^#{1,6}\s+.+$",
+        min_length=3,
+        max_length=200,
+        examples=["## Tasks", "### Status Updates", "# Overview", "#### Implementation Details"]
+    )],
+    content: Annotated[str, Field(
+        description="Content to insert, replace, or append to the section",
+        min_length=1,
+        max_length=100000
+    )],
+    operation: Annotated[Literal["insert_after", "insert_before", "replace", "append_to_section"], Field(
+        description="How to edit the section. 'insert_after' = add content after heading, 'insert_before' = add before heading, 'replace' = replace entire section, 'append_to_section' = add to end of section",
+        default="insert_after"
+    )] = "insert_after",
+    create_if_missing: Annotated[bool, Field(
+        description="Create the section at the end of the note if it doesn't exist",
+        default=False
+    )] = False,
+    ctx=None
+):
+    """
+    Edit a specific section of a note identified by a markdown heading.
+    
+    When to use:
+    - Adding content to a specific section without rewriting the whole note
+    - Updating a particular section (like status updates, task lists)
+    - Inserting content at precise locations in structured notes
+    - Building up notes incrementally by section
+    
+    When NOT to use:
+    - Simple append to end of note (use update_note with merge_strategy='append')
+    - Replacing entire note content (use update_note)
+    - Creating a new note (use create_note)
+    
+    Section identification:
+    - Sections are identified by markdown headings (# ## ### etc.)
+    - Match is case-insensitive
+    - First matching heading is used if duplicates exist
+    - Section includes content until next heading of same/higher level
+    
+    Operations:
+    - insert_after: Add content immediately after the section heading
+    - insert_before: Add content immediately before the section heading
+    - replace: Replace entire section including the heading
+    - append_to_section: Add content at the end of the section
+    
+    Returns:
+        Edit status including whether section was found or created
+    """
+    try:
+        return await edit_note_section(path, section_identifier, content, operation, create_if_missing, ctx)
+    except (ValueError, FileNotFoundError) as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(f"Failed to edit section: {str(e)}")
 
 @mcp.tool()
 async def delete_note_tool(

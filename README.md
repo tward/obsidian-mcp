@@ -285,6 +285,45 @@ Update the content of an existing note.
 3. Update with the complete new content
 4. Or use append mode to add content to the end
 
+#### `edit_note_section`
+Edit a specific section of a note identified by a markdown heading.
+
+**Parameters:**
+- `path`: Path to the note to edit
+- `section_identifier`: Markdown heading that identifies the section (e.g., "## Tasks", "### Status")
+- `content`: Content to insert, replace, or append
+- `operation` (default: `"insert_after"`): How to edit the section
+  - `"insert_after"`: Add content after the section heading
+  - `"insert_before"`: Add content before the section heading
+  - `"replace"`: Replace entire section including heading
+  - `"append_to_section"`: Add content at the end of the section
+- `create_if_missing` (default: `false`): Create section if it doesn't exist
+
+**Example usage:**
+```python
+# Add tasks to a specific section
+await edit_note_section(
+    "Daily/2024-01-15.md",
+    "## Tasks",
+    "- [ ] Review PR\n- [ ] Update docs",
+    operation="append_to_section"
+)
+
+# Update a status section
+await edit_note_section(
+    "Projects/Website.md",
+    "### Current Status",
+    "### Current Status\n\nPhase 2 completed!",
+    operation="replace"
+)
+```
+
+**Use cases:**
+- Adding items to task lists without rewriting the whole note
+- Updating status sections in project notes
+- Building up notes incrementally by section
+- Inserting content at precise locations
+
 #### `delete_note`
 Delete a note from the vault.
 
@@ -883,6 +922,7 @@ Use 'created' to find notes by creation date, 'modified' for last edit date
 
 **Adding to daily notes:**
 - Use `merge_strategy="append"` to add entries without losing existing content
+- Use `edit_note_section` to add content to specific sections (like "## Tasks" or "## Notes")
 
 **Creating new notes:**
 - Use `create_note` with `overwrite=false` (default) to prevent accidental overwrites
@@ -919,6 +959,13 @@ Use 'created' to find notes by creation date, 'modified' for last edit date
 6. Test with MCP Inspector before deploying
 
 ## Changelog
+
+### v2.0.3 (2025-01-24)
+- ✏️ **Section-based editing** - New `edit_note_section` tool for precise content insertion and updates
+- 🎯 **Four edit operations** - Insert before/after headings, replace sections, or append to section ends
+- 📍 **Smart section detection** - Case-insensitive markdown heading matching with hierarchy support
+- 🔧 **Create missing sections** - Optionally create sections if they don't exist
+- 📝 **Preserve note structure** - Edit specific parts without rewriting entire notes
 
 ### v2.0.2 (2025-01-24)
 - 🎯 **Simplified architecture** - Removed memory index, SQLite is now the only search method
