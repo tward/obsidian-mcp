@@ -112,8 +112,8 @@ More text after the JSON block.
 """
         (vault_path / "large-doc.md").write_text(large_content)
         
-        # Initialize vault with persistent index
-        vault = ObsidianVault(vault_path, use_persistent_index=True)
+        # Initialize vault
+        vault = ObsidianVault(vault_path)
         
         # Build index
         print("Building index...")

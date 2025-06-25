@@ -22,13 +22,12 @@ logger = logging.getLogger(__name__)
 class ObsidianVault:
     """Direct filesystem access to Obsidian vault."""
     
-    def __init__(self, vault_path: Optional[str] = None, use_persistent_index: bool = True):
+    def __init__(self, vault_path: Optional[str] = None):
         """
         Initialize vault access.
         
         Args:
             vault_path: Path to vault. If not provided, uses OBSIDIAN_VAULT_PATH env var.
-            use_persistent_index: Whether to use persistent SQLite index (default: True)
         """
         self.vault_path = Path(vault_path or os.getenv("OBSIDIAN_VAULT_PATH", ""))
         
@@ -44,17 +43,25 @@ class ObsidianVault:
         if not self.vault_path.is_dir():
             raise ValueError(f"Vault path is not a directory: {self.vault_path}")
         
-        # Initialize search index (persistent or in-memory)
-        self.use_persistent_index = use_persistent_index
+        # Initialize SQLite search index
         self.persistent_index: Optional[PersistentSearchIndex] = None
-        
-        # Keep in-memory cache for backward compatibility and fast access
-        self._search_index: Dict[str, Dict[str, Any]] = {}
         self._index_timestamp: Optional[float] = None
         self._index_lock = asyncio.Lock()
         
         # Track if persistent index has been initialized
         self._persistent_index_initialized = False
+        
+        # Store last search metadata for access by tools
+        self._last_search_metadata: Optional[Dict[str, Any]] = None
+        
+        # Track if an index update is in progress
+        self._index_update_in_progress = False
+        self._index_update_task: Optional[asyncio.Task] = None
+        
+        # Configuration for index updates
+        self._index_update_interval = int(os.getenv("OBSIDIAN_INDEX_UPDATE_INTERVAL", "300"))  # 5 minutes default
+        self._index_batch_size = int(os.getenv("OBSIDIAN_INDEX_BATCH_SIZE", "50"))
+        self._auto_index_update = os.getenv("OBSIDIAN_AUTO_INDEX_UPDATE", "true").lower() in ("true", "1", "yes", "on")
     
     def _ensure_safe_path(self, path: str) -> Path:
         """
@@ -383,77 +390,112 @@ class ObsidianVault:
     
     async def _initialize_persistent_index(self) -> None:
         """Initialize the persistent search index if not already done."""
-        if not self._persistent_index_initialized and self.use_persistent_index:
+        if not self._persistent_index_initialized:
             try:
                 self.persistent_index = PersistentSearchIndex(self.vault_path)
                 await self.persistent_index.initialize()
                 self._persistent_index_initialized = True
                 logger.info("Persistent search index initialized")
+            except PermissionError as e:
+                raise RuntimeError(
+                    f"Permission denied when accessing search index. "
+                    f"To fix: Ensure '{self.vault_path}/.obsidian' is writable: "
+                    f"chmod +w '{self.vault_path}/.obsidian'. "
+                    f"Original error: {e}"
+                )
+            except OSError as e:
+                if "read-only" in str(e).lower():
+                    raise RuntimeError(
+                        f"Cannot create search index: vault appears to be read-only. "
+                        f"Please ensure '{self.vault_path}' is writable."
+                    )
+                else:
+                    raise RuntimeError(f"File system error: {e}")
             except Exception as e:
-                logger.error(f"Failed to initialize persistent index: {e}")
-                logger.info("Falling back to in-memory index")
-                self.use_persistent_index = False
-                self.persistent_index = None
+                raise RuntimeError(
+                    f"Failed to initialize search index: {type(e).__name__}: {e}. "
+                    f"This may be due to: 1) Missing aiosqlite package, "
+                    f"2) Corrupted database file, 3) Incompatible Python version"
+                )
+    
 
+    def _start_background_index_update(self) -> None:
+        """Start a background task to update the search index."""
+        if self._index_update_in_progress:
+            logger.warning("Index update already in progress, skipping")
+            return
+        
+        # Cancel any existing update task
+        if self._index_update_task and not self._index_update_task.done():
+            self._index_update_task.cancel()
+        
+        # Start new background update
+        self._index_update_task = asyncio.create_task(self._update_search_index_async())
+        logger.info("Started background index update task")
+    
+    async def _update_search_index_async(self) -> None:
+        """Async wrapper for index update with error handling."""
+        try:
+            self._index_update_in_progress = True
+            await self._update_search_index()
+        except Exception as e:
+            logger.error(f"Background index update failed: {e}")
+        finally:
+            self._index_update_in_progress = False
+            logger.info("Background index update completed")
+    
     async def _update_search_index(self) -> None:
         """Update the search index with current vault content."""
         import time
         
         # Initialize persistent index if needed
-        if self.use_persistent_index and not self._persistent_index_initialized:
+        if not self._persistent_index_initialized:
             await self._initialize_persistent_index()
         
         async with self._index_lock:
-            if self.use_persistent_index and self.persistent_index:
-                # Use persistent index with incremental updates
-                await self._update_persistent_index()
-            else:
-                # Fall back to in-memory index
-                await self._update_memory_index()
-            
+            # Use persistent index with incremental updates
+            await self._update_persistent_index()
             self._index_timestamp = time.time()
     
-    async def _update_memory_index(self) -> None:
-        """Update the in-memory search index (legacy method)."""
-        # Clear existing index
-        self._search_index.clear()
-        
-        # Index all markdown files
-        for md_file in self.vault_path.rglob("*.md"):
-            try:
-                # Get file stats
-                stat = md_file.stat()
-                rel_path = str(md_file.relative_to(self.vault_path))
-                
-                # Read content
-                async with aiofiles.open(md_file, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                
-                # Store in index
-                self._search_index[rel_path] = {
-                    'content': content.lower(),  # Store lowercase for searching
-                    'original_content': content,
-                    'mtime': stat.st_mtime,
-                    'size': stat.st_size
-                }
-            except Exception:
-                # Skip files we can't read
-                continue
     
     async def _update_persistent_index(self) -> None:
         """Update the persistent search index with incremental updates."""
         existing_files = set()
+        files_to_process = []
         
-        # Process all markdown files
-        for md_file in self.vault_path.rglob("*.md"):
+        # First, collect all markdown files
+        logger.info("Scanning vault for markdown files...")
+        try:
+            all_files = list(self.vault_path.rglob("*.md"))
+            logger.info(f"Found {len(all_files)} markdown files in vault")
+        except Exception as e:
+            logger.error(f"Failed to scan vault: {e}")
+            return
+        
+        # Check which files need updating
+        for md_file in all_files:
             try:
-                # Get file stats
                 stat = md_file.stat()
                 rel_path = str(md_file.relative_to(self.vault_path))
                 existing_files.add(rel_path)
                 
                 # Check if file needs updating
                 if await self.persistent_index.needs_update(rel_path, stat.st_mtime, stat.st_size):
+                    files_to_process.append((md_file, rel_path, stat))
+            except Exception as e:
+                logger.error(f"Failed to check file {md_file}: {e}")
+                continue
+        
+        logger.info(f"{len(files_to_process)} files need indexing")
+        
+        # Process files in batches
+        for i in range(0, len(files_to_process), self._index_batch_size):
+            batch = files_to_process[i:i + self._index_batch_size]
+            batch_end = min(i + self._index_batch_size, len(files_to_process))
+            logger.info(f"Processing batch {i+1}-{batch_end} of {len(files_to_process)} files")
+            
+            for md_file, rel_path, stat in batch:
+                try:
                     # Read content
                     async with aiofiles.open(md_file, 'r', encoding='utf-8') as f:
                         content = await f.read()
@@ -467,20 +509,17 @@ class ObsidianVault:
                     )
                     
                     logger.debug(f"Indexed: {rel_path}")
-                    
-                    # Also update memory cache for fast access
-                    self._search_index[rel_path] = {
-                        'content': content.lower(),
-                        'original_content': content,
-                        'mtime': stat.st_mtime,
-                        'size': stat.st_size
-                    }
-            except Exception as e:
-                logger.error(f"Failed to index {md_file}: {e}")
-                continue
+                except Exception as e:
+                    logger.error(f"Failed to index {md_file}: {e}")
+                    continue
+            
+            # Yield control periodically to prevent blocking
+            await asyncio.sleep(0.1)
         
         # Remove orphaned entries
+        logger.info("Cleaning up orphaned index entries...")
         await self.persistent_index.clear_orphaned_entries(existing_files)
+        logger.info("Index update completed")
     
     def _extract_file_metadata(self, content: str) -> Dict[str, Any]:
         """Extract metadata from file content (tags, frontmatter, etc.)."""
@@ -539,27 +578,47 @@ class ObsidianVault:
             
         Returns:
             List of search results
+            
+        Note: Search metadata (total_count, truncated) is stored in self._last_search_metadata
         """
         import time
         
         # Initialize persistent index if needed (but not initialized)
-        if self.use_persistent_index and not self._persistent_index_initialized:
+        if not self._persistent_index_initialized:
             await self._initialize_persistent_index()
         
-        # Update index if it's stale (older than 60 seconds)
-        if self._index_timestamp is None or (time.time() - self._index_timestamp) > 60:
-            await self._update_search_index()
+        # Check if we should update the index
+        should_update = False
+        if self._auto_index_update and not self._index_update_in_progress:
+            if self._index_timestamp is None or (time.time() - self._index_timestamp) > self._index_update_interval:
+                should_update = True
+                logger.info(f"Index is stale (last updated: {self._index_timestamp}), scheduling update")
         
-        # Use persistent index if available
-        if self.use_persistent_index and self.persistent_index:
-            return await self._search_with_persistent_index(query, context_length, max_results)
-        else:
-            return await self._search_with_memory_index(query, context_length, max_results)
+        # Start background index update if needed (non-blocking)
+        if should_update:
+            self._start_background_index_update()
+        elif self._index_update_in_progress:
+            logger.info("Index update already in progress, using current index")
+        
+        # Use persistent index
+        return await self._search_with_persistent_index(query, context_length, max_results)
+    
+    def get_last_search_metadata(self) -> Optional[Dict[str, Any]]:
+        """
+        Get metadata from the last search operation.
+        
+        Returns:
+            Dictionary with total_count, truncated, and limit, or None if no search has been performed
+        """
+        return self._last_search_metadata
     
     async def _search_with_persistent_index(self, query: str, context_length: int, max_results: int) -> List[Dict[str, Any]]:
         """Search using the persistent SQLite index."""
         # Use simple search for now (FTS5 search can be added later)
-        search_results = await self.persistent_index.search_simple(query, max_results)
+        search_data = await self.persistent_index.search_simple(query, max_results)
+        search_results = search_data['results']
+        total_count = search_data['total_count']
+        truncated = search_data['truncated']
         
         results = []
         query_lower = query.lower()
@@ -606,62 +665,16 @@ class ObsidianVault:
         
         # Sort by score (descending)
         results.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Store search metadata
+        self._last_search_metadata = {
+            "total_count": total_count,
+            "truncated": truncated,
+            "limit": max_results
+        }
+        
         return results
     
-    async def _search_with_memory_index(self, query: str, context_length: int, max_results: int) -> List[Dict[str, Any]]:
-        """Search using the in-memory index (legacy method)."""
-        results = []
-        query_lower = query.lower()
-        
-        # Search through indexed content
-        for rel_path, file_data in self._search_index.items():
-            if query_lower in file_data['content']:
-                content = file_data['original_content']
-                content_lower = file_data['content']
-                
-                # Find all matches
-                matches = []
-                start_pos = 0
-                while True:
-                    match_pos = content_lower.find(query_lower, start_pos)
-                    if match_pos == -1:
-                        break
-                    matches.append(match_pos)
-                    start_pos = match_pos + 1
-                
-                # Extract context for first match
-                if matches:
-                    first_match = matches[0]
-                    
-                    # Calculate context bounds
-                    start = max(0, first_match - context_length // 2)
-                    end = min(len(content), first_match + len(query) + context_length // 2)
-                    context = content[start:end].strip()
-                    
-                    # Add ellipsis if truncated
-                    if start > 0:
-                        context = "..." + context
-                    if end < len(content):
-                        context = context + "..."
-                    
-                    # Calculate simple relevance score based on match count
-                    score = min(len(matches) / 10.0 + 1.0, 5.0)  # Score between 1 and 5
-                    
-                    results.append({
-                        "path": rel_path,
-                        "score": score,
-                        "matches": [query],
-                        "match_count": len(matches),
-                        "context": context
-                    })
-                    
-                    # Stop if we have enough results
-                    if len(results) >= max_results:
-                        break
-        
-        # Sort by score (descending) and limit results
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:max_results]
     
     async def search_by_regex(self, pattern: str, flags: int = 0, context_length: int = 100, max_results: int = 50) -> List[Dict[str, Any]]:
         """
@@ -679,95 +692,20 @@ class ObsidianVault:
         import time
         
         # Initialize persistent index if needed
-        if self.use_persistent_index and not self._persistent_index_initialized:
+        if not self._persistent_index_initialized:
             await self._initialize_persistent_index()
         
         # Update index if it's stale
         if self._index_timestamp is None or (time.time() - self._index_timestamp) > 60:
             await self._update_search_index()
         
-        # Use persistent index if available for efficient regex search
-        if self.use_persistent_index and self.persistent_index:
-            results = await self.persistent_index.search_regex(pattern, flags, max_results, context_length)
-            # Convert filepath to path for consistency
-            for result in results:
-                result["path"] = result.pop("filepath")
-            return results
-        else:
-            # Fall back to in-memory search
-            return await self._search_by_regex_memory(pattern, flags, context_length, max_results)
+        # Use persistent index for efficient regex search
+        results = await self.persistent_index.search_regex(pattern, flags, max_results, context_length)
+        # Convert filepath to path for consistency
+        for result in results:
+            result["path"] = result.pop("filepath")
+        return results
     
-    async def _search_by_regex_memory(self, pattern: str, flags: int = 0, context_length: int = 100, max_results: int = 50) -> List[Dict[str, Any]]:
-        """Legacy in-memory regex search (fallback when persistent index is disabled)."""
-        # Compile regex pattern
-        try:
-            regex = re.compile(pattern, flags)
-        except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}")
-        
-        results = []
-        
-        # Search through indexed content
-        for rel_path, file_data in self._search_index.items():
-            content = file_data['original_content']
-            
-            # Find all matches with their positions
-            matches = list(regex.finditer(content))
-            
-            if matches:
-                # Get line numbers for better context
-                lines = content.split('\n')
-                line_starts = [0]
-                for line in lines[:-1]:
-                    line_starts.append(line_starts[-1] + len(line) + 1)
-                
-                # Extract contexts for matches
-                match_contexts = []
-                for match in matches[:5]:  # Limit to first 5 matches per file
-                    match_start = match.start()
-                    match_end = match.end()
-                    
-                    # Find line number
-                    line_num = 0
-                    for i, start in enumerate(line_starts):
-                        if start > match_start:
-                            line_num = i
-                            break
-                    else:
-                        line_num = len(lines)
-                    
-                    # Extract context
-                    context_start = max(0, match_start - context_length // 2)
-                    context_end = min(len(content), match_end + context_length // 2)
-                    context = content[context_start:context_end].strip()
-                    
-                    # Add ellipsis if truncated
-                    if context_start > 0:
-                        context = "..." + context
-                    if context_end < len(content):
-                        context = context + "..."
-                    
-                    match_contexts.append({
-                        "match": match.group(0),
-                        "line": line_num,
-                        "context": context,
-                        "groups": match.groups() if match.groups() else None
-                    })
-                
-                results.append({
-                    "path": rel_path,
-                    "match_count": len(matches),
-                    "matches": match_contexts,
-                    "score": min(len(matches) / 5.0 + 1.0, 5.0)  # Score based on match count
-                })
-                
-                # Stop if we have enough results
-                if len(results) >= max_results:
-                    break
-        
-        # Sort by score (descending)
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:max_results]
     
     async def list_notes(self, directory: Optional[str] = None, recursive: bool = True) -> List[Dict[str, str]]:
         """
@@ -954,13 +892,6 @@ class ObsidianVault:
                 "error": str(e)
             }
     
-    async def close(self):
-        """Close any open resources (like database connections)."""
-        if self.persistent_index:
-            await self.persistent_index.close()
-            self.persistent_index = None
-            self._persistent_index_initialized = False
-
 
 # Global vault instance (will be initialized in server.py)
 vault: Optional[ObsidianVault] = None
@@ -973,20 +904,14 @@ def get_vault() -> ObsidianVault:
     return vault
 
 
-def init_vault(vault_path: Optional[str] = None, use_persistent_index: Optional[bool] = None) -> ObsidianVault:
+def init_vault(vault_path: Optional[str] = None) -> ObsidianVault:
     """
     Initialize the global vault instance.
     
     Args:
         vault_path: Path to vault (uses OBSIDIAN_VAULT_PATH env var if not provided)
-        use_persistent_index: Whether to use persistent index (uses OBSIDIAN_USE_PERSISTENT_INDEX env var if not provided)
     """
     global vault
     
-    # Check environment variable for persistent index preference
-    if use_persistent_index is None:
-        env_value = os.getenv("OBSIDIAN_USE_PERSISTENT_INDEX", "true").lower()
-        use_persistent_index = env_value in ("true", "1", "yes", "on")
-    
-    vault = ObsidianVault(vault_path, use_persistent_index=use_persistent_index)
+    vault = ObsidianVault(vault_path)
     return vault

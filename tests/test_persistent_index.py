@@ -94,8 +94,17 @@ class TestPersistentIndex:
         await index.index_file("note3.md", "Python is great for data science", 1000.0, 100)
         
         # Search for Python
-        results = await index.search_simple("python", 10)
+        result_data = await index.search_simple("python", 10)
+        assert "results" in result_data
+        assert "total_count" in result_data
+        assert "truncated" in result_data
+        assert "limit" in result_data
+        
+        results = result_data["results"]
         assert len(results) == 2
+        assert result_data["total_count"] == 2
+        assert result_data["truncated"] == False
+        assert result_data["limit"] == 10
         assert any(r["filepath"] == "note1.md" for r in results)
         assert any(r["filepath"] == "note3.md" for r in results)
         
@@ -109,9 +118,9 @@ class TestPersistentIndex:
         (notes_dir / "note1.md").write_text("# Note 1\n\nThis is the first note about Python.")
         (notes_dir / "note2.md").write_text("# Note 2\n\nThis is about JavaScript.")
         
-        # Create vault with persistent index
+        # Create vault
         os.environ["OBSIDIAN_VAULT_PATH"] = test_vault_dir
-        vault = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault = ObsidianVault(test_vault_dir)
         
         # First search (builds index)
         results = await vault.search_notes("python")
@@ -138,13 +147,13 @@ class TestPersistentIndex:
         (notes_dir / "persistent_test.md").write_text("# Persistent Test\n\nThis should persist.")
         
         # First session
-        vault1 = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault1 = ObsidianVault(test_vault_dir)
         results1 = await vault1.search_notes("persist")
         assert len(results1) == 1
         await vault1.close()
         
         # Second session (should use existing index)
-        vault2 = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault2 = ObsidianVault(test_vault_dir)
         # Don't update index timestamp to test persistence
         vault2._index_timestamp = 9999999999  # Far future
         
@@ -152,6 +161,37 @@ class TestPersistentIndex:
         assert len(results2) == 1  # Should find the note without re-indexing
         
         await vault2.close()
+    
+    @pytest.mark.asyncio
+    async def test_search_simple_truncation(self, test_vault_dir):
+        """Test that search_simple correctly reports truncation."""
+        index = PersistentSearchIndex(Path(test_vault_dir))
+        await index.initialize()
+        
+        # Index many files with same content
+        for i in range(100):
+            await index.index_file(
+                f"note_{i:03d}.md", 
+                "This is a test note with common content", 
+                1000.0 + i, 
+                100
+            )
+        
+        # Search with small limit
+        result_data = await index.search_simple("common", 10)
+        assert result_data["total_count"] == 100
+        assert len(result_data["results"]) == 10
+        assert result_data["truncated"] == True
+        assert result_data["limit"] == 10
+        
+        # Search with large limit
+        result_data = await index.search_simple("common", 200)
+        assert result_data["total_count"] == 100
+        assert len(result_data["results"]) == 100
+        assert result_data["truncated"] == False
+        assert result_data["limit"] == 200
+        
+        await index.close()
 
 
 if __name__ == "__main__":

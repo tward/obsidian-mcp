@@ -6,7 +6,7 @@ from typing import Annotated, Optional, List, Literal
 from pydantic import Field
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from .utils.filesystem import init_vault
+from .utils.filesystem import init_vault, get_vault
 
 # Configure logging
 logging.basicConfig(
@@ -191,15 +191,32 @@ async def update_note_tool(
         raise ToolError(f"Failed to update note: {str(e)}")
 
 @mcp.tool()
-async def delete_note_tool(path: str, ctx=None):
+async def delete_note_tool(
+    path: Annotated[str, Field(
+        description="Path to the note to delete from your vault",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Archive/Old Note.md", "Temp/Draft.md"]
+    )],
+    ctx=None
+):
     """
-    Delete a note from the vault.
+    Delete a note from the vault permanently.
     
-    Args:
-        path: Path to the note to delete
-        
+    When to use:
+    - Removing outdated or duplicate notes
+    - Cleaning up temporary drafts
+    - Part of a move operation (delete after successful copy)
+    
+    When NOT to use:
+    - Archiving (use move_note to Archive folder instead)
+    - Temporary removal (no undo available)
+    
+    ⚠️ WARNING: This operation cannot be undone. The note will be permanently deleted.
+    
     Returns:
-        Deletion status
+        Deletion confirmation with the path of the deleted note
     """
     try:
         return await delete_note(path, ctx)
@@ -229,6 +246,12 @@ async def search_notes_tool(
         le=500,
         default=100
     )] = 100,
+    max_results: Annotated[int, Field(
+        description="Maximum number of results to return. Use smaller values for faster responses and larger values for comprehensive searches.",
+        ge=1,
+        le=500,
+        default=50
+    )] = 50,
     ctx=None
 ):
     """
@@ -251,10 +274,11 @@ async def search_notes_tool(
     - Finding a specific known note (use read_note directly)
     
     Returns:
-        Search results with matched notes, relevance scores, and context
+        Search results with matched notes, relevance scores, and context.
+        Response includes total_count and truncated fields when limit is reached.
     """
     try:
-        return await search_notes(query, context_length, ctx)
+        return await search_notes(query, context_length, max_results, ctx)
     except ValueError as e:
         raise ToolError(str(e))
     except Exception as e:
@@ -422,16 +446,38 @@ async def search_by_property_tool(
         raise ToolError(f"Property search failed: {str(e)}")
 
 @mcp.tool()
-async def list_notes_tool(directory: str = None, recursive: bool = True, ctx=None):
+async def list_notes_tool(
+    directory: Annotated[Optional[str], Field(
+        description="Specific folder to list notes from. Leave empty to list entire vault.",
+        default=None,
+        examples=[None, "Projects", "Daily", "Archive/2024"]
+    )] = None,
+    recursive: Annotated[bool, Field(
+        description="Include notes from all subfolders. Set to false for only immediate children.",
+        default=True
+    )] = True,
+    ctx=None
+):
     """
     List notes in the vault or a specific directory.
     
-    Args:
-        directory: Specific directory to list (optional, defaults to root)
-        recursive: Whether to list all subdirectories recursively (default: true)
-        
+    When to use:
+    - Getting an overview of vault structure
+    - Finding notes in a specific folder
+    - Checking what notes exist before bulk operations
+    - Understanding vault organization
+    
+    When NOT to use:
+    - Searching for specific content (use search_notes)
+    - Finding notes by properties (use search_by_property)
+    - Just counting notes (this loads full paths)
+    
+    Performance notes:
+    - Fast for directories with <100 notes
+    - May be slower for large vaults (1000+ notes) with recursive=True
+    
     Returns:
-        Vault structure and note paths
+        Hierarchical structure of notes with paths and folder organization
     """
     try:
         return await list_notes(directory, recursive, ctx)
@@ -475,17 +521,47 @@ async def list_folders_tool(
         raise ToolError(f"Failed to list folders: {str(e)}")
 
 @mcp.tool()
-async def move_note_tool(source_path: str, destination_path: str, update_links: bool = True, ctx=None):
+async def move_note_tool(
+    source_path: Annotated[str, Field(
+        description="Current location of the note to move",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Inbox/Quick Note.md", "Projects/Old Project.md"]
+    )],
+    destination_path: Annotated[str, Field(
+        description="New location for the note. Folders will be created if needed.",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Projects/Active/Quick Note.md", "Archive/2024/Old Project.md"]
+    )],
+    update_links: Annotated[bool, Field(
+        description="Automatically update all links to this note across the vault. Recommended to keep true.",
+        default=True
+    )] = True,
+    ctx=None
+):
     """
     Move a note to a new location, optionally updating all links.
     
-    Args:
-        source_path: Current path of the note
-        destination_path: New path for the note
-        update_links: Whether to update links in other notes (default: true)
-        
+    When to use:
+    - Reorganizing notes into different folders
+    - Archiving completed projects
+    - Renaming notes (move to same folder with new name)
+    - Consolidating scattered notes
+    
+    When NOT to use:
+    - Copying notes (use read_note + create_note instead)
+    - Moving entire folders (use move_folder)
+    
+    Link updating:
+    - Searches entire vault for links to the moved note
+    - Updates both [[wikilinks]] and [markdown](links)
+    - Preserves link text and formatting
+    
     Returns:
-        Move status and updated links count
+        Move confirmation with old path, new path, and count of updated links
     """
     try:
         return await move_note(source_path, destination_path, update_links, ctx)
@@ -666,16 +742,39 @@ async def update_tags_tool(
         raise ToolError(f"Failed to update tags: {str(e)}")
 
 @mcp.tool()
-async def remove_tags_tool(path: str, tags: list[str], ctx=None):
+async def remove_tags_tool(
+    path: Annotated[str, Field(
+        description="Path to the note",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255
+    )],
+    tags: Annotated[List[str], Field(
+        description="Tags to remove from the note (without # prefix). Removes exact matches only.",
+        min_length=1,
+        max_length=50,
+        examples=[["outdated", "draft"], ["project/completed", "priority/high"]]
+    )],
+    ctx=None
+):
     """
-    Remove tags from a note's frontmatter.
+    Remove specific tags from a note's frontmatter.
     
-    Args:
-        path: Path to the note
-        tags: List of tags to remove (without # prefix)
-        
+    When to use:
+    - Cleaning up outdated tags
+    - Removing temporary tags (like 'draft' or 'review')
+    - Tag maintenance and reorganization
+    - After completing tagged tasks
+    
+    When NOT to use:
+    - Removing all tags (use update_tags with empty list)
+    - Replacing tags (use update_tags with merge=False)
+    
+    Note: Only removes exact matches. To remove all subtags of a hierarchical tag,
+    list them explicitly or use update_tags.
+    
     Returns:
-        Updated tag list
+        Updated tag list after removal, with count of removed tags
     """
     try:
         return await remove_tags(path, tags, ctx)
@@ -685,15 +784,34 @@ async def remove_tags_tool(path: str, tags: list[str], ctx=None):
         raise ToolError(f"Failed to remove tags: {str(e)}")
 
 @mcp.tool()
-async def get_note_info_tool(path: str, ctx=None):
+async def get_note_info_tool(
+    path: Annotated[str, Field(
+        description="Path to the note to analyze",
+        pattern=r"^[^/].*\.md$",
+        min_length=1,
+        max_length=255,
+        examples=["Projects/Overview.md", "Daily/2024-01-15.md"]
+    )],
+    ctx=None
+):
     """
-    Get metadata and information about a note without retrieving its full content.
+    Get metadata and statistics about a note without reading its content.
     
-    Args:
-        path: Path to the note
-        
+    When to use:
+    - Checking note properties quickly (tags, dates, size)
+    - Getting frontmatter without loading content
+    - Gathering statistics (word count, link count)
+    - Verifying note exists and getting basic info
+    - Batch processing note metadata
+    
+    When NOT to use:
+    - Reading note content (use read_note)
+    - Searching for notes (use search tools)
+    - Modifying metadata (use specific update tools)
+    
     Returns:
-        Note metadata and statistics
+        Note metadata including path, existence, dates, size, frontmatter properties,
+        and statistics (word count, link count, tag count, image presence)
     """
     try:
         return await get_note_info(path, ctx)
@@ -954,6 +1072,7 @@ async def view_note_images_tool(
         raise ToolError(str(e))
     except Exception as e:
         raise ToolError(f"Failed to view note images: {str(e)}")
+
 
 
 def main():

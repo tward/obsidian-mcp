@@ -299,6 +299,7 @@ Search for notes containing specific text or tags.
 **Parameters:**
 - `query`: Search query (supports Obsidian search syntax)
 - `context_length` (default: `100`): Number of characters to show around matches
+- `max_results` (default: `50`): Maximum number of results to return (1-500)
 
 **Search Syntax:**
 - Text search: `"machine learning"`
@@ -309,6 +310,16 @@ Search for notes containing specific text or tags.
 - Path search: `path:Daily/`
 - Property search: `property:status:active` or `property:priority:>2`
 - Combined: `tag:urgent TODO`
+
+**Returns:**
+```json
+{
+  "results": [...],        // Array of matched notes
+  "total_count": 150,      // Total matches found
+  "limit": 50,             // max_results used
+  "truncated": true        // More results available
+}
+```
 
 **Property Search Examples:**
 - `property:status:active` - Find notes where status = "active"
@@ -909,6 +920,16 @@ Use 'created' to find notes by creation date, 'modified' for last edit date
 
 ## Changelog
 
+### v2.0.2 (2025-01-24)
+- 🎯 **Simplified architecture** - Removed memory index, SQLite is now the only search method
+- 🔍 **Search transparency** - Added metadata to search results (total_count, truncated, limit)
+- ⚙️ **Configurable search limits** - Exposed max_results parameter (1-500, default 50)
+- 🧹 **Reduced tool clutter** - Removed unnecessary index management tools
+- 📝 **Reasoning-friendly improvements** - Enhanced all tools with proper Field annotations and comprehensive docstrings
+- 🚀 **Better AI reasoning** - Added "When to use" and "When NOT to use" sections to all tools
+- ⚡ **Performance notes** - Added explicit performance guidance for expensive operations
+- 🔧 **Cleaner codebase** - Removed ~500 lines of memory index code, reducing maintenance burden
+
 ### v2.0.0 (2025-01-24)
 - 🚀 **Complete architecture overhaul** - Migrated from REST API to direct filesystem access
 - ⚡ **5x faster searches** with persistent SQLite indexing that survives between sessions
@@ -1007,8 +1028,8 @@ twine check dist/*
 twine upload dist/* -u __token__ -p $PYPI_API_KEY
 
 # 6. Create and push git tag
-git tag -a v1.1.8 -m "Release version 1.1.8"
-git push origin v1.1.8
+git tag -a v2.0.2 -m "Release version 2.0.2"
+git push origin v2.0.2
 ```
 
 Users can then install and run with:
@@ -1042,21 +1063,11 @@ The server now includes a **persistent search index** using SQLite for dramatica
 Set these environment variables to customize behavior:
 
 ```bash
-# Enable/disable persistent index (default: true)
-export OBSIDIAN_USE_PERSISTENT_INDEX=true
-
 # Set logging level (default: INFO, options: DEBUG, INFO, WARNING, ERROR)
 export OBSIDIAN_LOG_LEVEL=DEBUG
 ```
 
-The persistent index is stored in your vault at `.obsidian/mcp-search-index.db`.
-
-#### Legacy In-Memory Index:
-
-To use the legacy in-memory index (not recommended):
-```bash
-export OBSIDIAN_USE_PERSISTENT_INDEX=false
-```
+The search index is stored in your vault at `.obsidian/mcp-search-index.db`.
 
 ### Performance Notes
 

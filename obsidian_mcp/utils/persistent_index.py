@@ -262,19 +262,30 @@ class PersistentSearchIndex:
         results = await cursor.fetchall()
         return results
         
-    async def search_simple(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def search_simple(self, query: str, limit: int = 50) -> Dict[str, Any]:
         """
-        Simple substring search (for compatibility with current implementation).
+        Simple substring search with total count.
         
-        Returns list of file info dictionaries.
+        Returns dictionary with results and metadata.
         """
         query_lower = query.lower()
+        search_pattern = f"%{query_lower}%"
+        
+        # First get total count
+        count_cursor = await self.db.execute("""
+            SELECT COUNT(*)
+            FROM file_index
+            WHERE content_lower LIKE ?
+        """, (search_pattern,))
+        total_count = (await count_cursor.fetchone())[0]
+        
+        # Then get limited results
         cursor = await self.db.execute("""
             SELECT filepath, content, mtime, size
             FROM file_index
             WHERE content_lower LIKE ?
             LIMIT ?
-        """, (f"%{query_lower}%", limit))
+        """, (search_pattern, limit))
         
         results = []
         async for row in cursor:
@@ -284,8 +295,13 @@ class PersistentSearchIndex:
                 "mtime": row[2],
                 "size": row[3]
             })
-            
-        return results
+        
+        return {
+            "results": results,
+            "total_count": total_count,
+            "limit": limit,
+            "truncated": len(results) < total_count
+        }
         
     async def search_regex(self, pattern: str, flags: int = 0, limit: int = 50, 
                           context_length: int = 100, max_parallel: int = 10) -> List[Dict[str, Any]]:

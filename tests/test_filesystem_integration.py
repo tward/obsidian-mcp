@@ -89,9 +89,17 @@ And another style:
             b'\x00\x00\x01\x01\x00\x05\xf8\xdc\xccO\x00\x00\x00\x00IEND\xaeB`\x82'
         )
         
+        # Update search index for tests
+        from obsidian_mcp.utils.filesystem import get_vault
+        current_vault = get_vault()
+        if current_vault:
+            await current_vault._update_search_index()
+        
         yield vault
         
         # Cleanup
+        if current_vault and current_vault.persistent_index:
+            await current_vault.persistent_index.close()
         shutil.rmtree(temp_dir)
     
     @pytest.mark.asyncio
@@ -184,6 +192,12 @@ This content has been updated.
         
         assert result["count"] > 0
         assert any("test_note.md" in r["path"] for r in result["results"])
+        
+        # Test new metadata fields
+        assert "total_count" in result
+        assert "truncated" in result
+        assert isinstance(result["total_count"], int)
+        assert isinstance(result["truncated"], bool)
     
     @pytest.mark.asyncio
     async def test_search_by_tag(self, test_vault):
@@ -233,6 +247,32 @@ This content has been updated.
         from fastmcp import Image
         assert len(images) > 0
         assert all(isinstance(img, Image) for img in images)
+    
+    @pytest.mark.asyncio
+    async def test_search_with_max_results(self, test_vault):
+        """Test search with max_results parameter."""
+        # Create many test notes to test truncation
+        for i in range(10):
+            await create_note(f"search_test_{i}.md", f"# Search Test {i}\n\nThis note contains the word searchtest.")
+        
+        # Force index update
+        from obsidian_mcp.utils.filesystem import get_vault
+        vault = get_vault()
+        if vault:
+            vault._index_timestamp = None  # Force re-index
+            await vault._update_search_index()
+        
+        # Search with small limit
+        result_limited = await search_notes("searchtest", max_results=5)
+        assert result_limited["count"] == 5
+        assert result_limited["total_count"] >= 10
+        assert result_limited["truncated"] == True
+        
+        # Search with large limit
+        result_full = await search_notes("searchtest", max_results=50)
+        assert result_full["count"] >= 10
+        assert result_full["total_count"] >= 10
+        assert result_full["truncated"] == False
     
     @pytest.mark.asyncio
     async def test_performance_search(self, test_vault):

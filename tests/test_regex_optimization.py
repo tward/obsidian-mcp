@@ -75,7 +75,7 @@ Also mentions #regex-patterns and #code-search.
     @pytest.mark.asyncio
     async def test_regex_with_persistent_index(self, test_vault_dir):
         """Test that regex search uses persistent index efficiently."""
-        vault = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault = ObsidianVault(test_vault_dir)
         
         # First do a simple search to ensure index is built
         _ = await vault.search_notes("def")
@@ -101,7 +101,7 @@ Also mentions #regex-patterns and #code-search.
     @pytest.mark.asyncio
     async def test_regex_early_termination(self, test_vault_dir):
         """Test that regex search stops early when limit is reached."""
-        vault = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault = ObsidianVault(test_vault_dir)
         
         # Search with a very low limit
         results = await vault.search_by_regex(
@@ -116,7 +116,7 @@ Also mentions #regex-patterns and #code-search.
     @pytest.mark.asyncio
     async def test_regex_line_numbers(self, test_vault_dir):
         """Test that line numbers are calculated correctly."""
-        vault = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault = ObsidianVault(test_vault_dir)
         
         # Search for TODO comments
         results = await vault.search_by_regex(
@@ -135,7 +135,7 @@ Also mentions #regex-patterns and #code-search.
     @pytest.mark.asyncio
     async def test_regex_with_groups(self, test_vault_dir):
         """Test regex with capture groups."""
-        vault = ObsidianVault(test_vault_dir, use_persistent_index=True)
+        vault = ObsidianVault(test_vault_dir)
         
         # Search for URLs with protocol group
         results = await vault.search_by_regex(

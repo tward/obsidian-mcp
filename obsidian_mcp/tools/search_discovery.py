@@ -362,6 +362,7 @@ async def _search_by_property(vault, property_query: str, context_length: int) -
 async def search_notes(
     query: str,
     context_length: int = 100,
+    max_results: int = 50,
     ctx=None
 ) -> dict:
     """
@@ -446,7 +447,10 @@ async def search_notes(
             results = await _search_by_property(vault, query, context_length)
         else:
             # Regular content search
-            results = await vault.search_notes(query, context_length)
+            results = await vault.search_notes(query, context_length, max_results)
+        
+        # Get search metadata if available (for content searches)
+        metadata = vault.get_last_search_metadata() if not (query.startswith("tag:") or query.startswith("path:") or query.startswith("property:")) else None
         
         # Return standardized search results structure
         return {
@@ -457,7 +461,8 @@ async def search_notes(
                 "context_length": context_length,
                 "type": "tag" if query.startswith("tag:") else "path" if query.startswith("path:") else "property" if query.startswith("property:") else "content"
             },
-            "truncated": False  # We don't have a hard limit on results currently
+            "truncated": metadata.get("truncated", False) if metadata else False,
+            "total_count": metadata.get("total_count", len(results)) if metadata else len(results)
         }
     except Exception as e:
         if ctx:

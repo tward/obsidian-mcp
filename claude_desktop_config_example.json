@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "obsidian": {
+      "command": "python",
+      "args": ["-m", "obsidian_mcp.server"],
+      "cwd": "/path/to/obsidian-mcp",
+      "env": {
+        "OBSIDIAN_VAULT_PATH": "/path/to/your/obsidian/vault",
+        "PYTHONPATH": "/path/to/obsidian-mcp",
+        "OBSIDIAN_INDEX_UPDATE_INTERVAL": "600",
+        "OBSIDIAN_INDEX_BATCH_SIZE": "50",
+        "OBSIDIAN_AUTO_INDEX_UPDATE": "true",
+        "OBSIDIAN_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
