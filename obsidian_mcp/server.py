@@ -606,31 +606,33 @@ async def move_note_tool(
         examples=["Projects/Active/Quick Note.md", "Archive/2024/Old Project.md"]
     )],
     update_links: Annotated[bool, Field(
-        description="Automatically update all links to this note across the vault. Recommended to keep true.",
+        description="Automatically update all [[wiki links]] if the filename changes during move",
         default=True
     )] = True,
     ctx=None
 ):
     """
-    Move a note to a new location, optionally updating all links.
+    Move a note to a new location, optionally with a new name.
     
     When to use:
     - Reorganizing notes into different folders
+    - Moving AND renaming in one operation
     - Archiving completed projects
-    - Renaming notes (move to same folder with new name)
     - Consolidating scattered notes
     
     When NOT to use:
+    - Just renaming within same folder (use rename_note for clarity)
     - Copying notes (use read_note + create_note instead)
     - Moving entire folders (use move_folder)
     
     Link updating:
-    - Searches entire vault for links to the moved note
-    - Updates both [[wikilinks]] and [markdown](links)
-    - Preserves link text and formatting
+    - Automatically detects if filename changes during move
+    - Updates all [[wiki-style links]] only when name changes
+    - Preserves link aliases and formatting
+    - No updates needed for simple folder moves (links work by name)
     
     Returns:
-        Move confirmation with old path, new path, and count of updated links
+        Move confirmation with path changes and link update details
     """
     try:
         return await move_note(source_path, destination_path, update_links, ctx)

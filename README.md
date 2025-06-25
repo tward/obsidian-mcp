@@ -562,14 +562,33 @@ Create a new folder in the vault, including all parent folders in the path.
 **Note:** This tool will create all necessary parent folders. For example, if "Research" exists but "Studies" doesn't, it will create both "Studies" and "2024".
 
 #### `move_note`
-Move a note to a new location.
+Move a note to a new location, optionally with a new name.
 
 **Parameters:**
 - `source_path`: Current path of the note
-- `destination_path`: New path for the note
-- `update_links` (deprecated): Has no effect - wiki links work by note name
+- `destination_path`: New path for the note (can include new filename)
+- `update_links` (default: `true`): Update links if filename changes
 
-**Note:** Since Obsidian uses wiki-style links (`[[Note Name]]`) that reference notes by name rather than path, links continue to work after moving notes to different folders.
+**Features:**
+- Can move to a different folder: `move_note("Inbox/Note.md", "Archive/Note.md")`
+- Can move AND rename: `move_note("Inbox/Old.md", "Archive/New.md")`
+- Automatically detects if filename changes and updates all wiki-style links
+- No link updates needed for simple folder moves (Obsidian links work by name)
+- Preserves link aliases when updating
+
+**Returns:**
+```json
+{
+  "success": true,
+  "source": "Inbox/Quick Note.md",
+  "destination": "Projects/Project Plan.md",
+  "renamed": true,
+  "details": {
+    "links_updated": 5,
+    "notes_updated": 3
+  }
+}
+```
 
 #### `rename_note`
 Rename a note and automatically update all references to it throughout your vault.

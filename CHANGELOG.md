@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.1] - 2024-12-26
+
+### Enhanced
+- **move_note tool**: Now automatically updates wiki-style links when the filename changes during a move
+  - Detects when destination has a different filename than source
+  - Updates all `[[wiki-style links]]` throughout the vault when renaming occurs
+  - Preserves link aliases during updates
+  - No link updates for simple folder moves (as intended)
+  - Can now move and rename in a single operation
+
+### Technical Details
+- move_note and rename_note now share the same link update logic
+- Comprehensive test coverage for all move scenarios
+- Full backward compatibility maintained
+
 ## [2.1.0] - 2024-12-26
 
 ### Added

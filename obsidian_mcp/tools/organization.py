@@ -17,33 +17,41 @@ async def move_note(
     ctx: Context = None
 ) -> dict:
     """
-    Move a note to a new location, optionally updating all links.
+    Move a note to a new location, optionally with a new name.
     
     Use this tool to reorganize your vault by moving notes to different
-    folders. Since Obsidian uses wiki-style links that reference notes by
-    name (not full path), links will continue to work after moving as long
-    as the filename remains the same.
-    
-    Note: The update_links parameter is deprecated and has no effect, as
-    Obsidian's wiki links work by note name, not path. Use rename_note if
-    you need to change the filename and update all references.
+    folders. If the filename changes during the move, all wiki-style links
+    will be automatically updated throughout your vault.
     
     Args:
         source_path: Current path of the note
-        destination_path: New path for the note
-        update_links: Deprecated - has no effect (kept for compatibility)
+        destination_path: New path for the note (can include a new filename)
+        update_links: Whether to update links when filename changes (default: true)
         ctx: MCP context for progress reporting
         
     Returns:
-        Dictionary containing move status
+        Dictionary containing move status and link update information
         
-    Example:
-        >>> await move_note("Inbox/Quick Note.md", "Projects/Research/Quick Note.md", ctx=ctx)
+    Examples:
+        >>> # Move without renaming (no link updates needed)
+        >>> await move_note("Inbox/Note.md", "Projects/Note.md")
+        {
+            "source": "Inbox/Note.md",
+            "destination": "Projects/Note.md",
+            "moved": true,
+            "renamed": false,
+            "links_updated": 0
+        }
+        
+        >>> # Move with renaming (links will be updated)
+        >>> await move_note("Inbox/Quick Note.md", "Projects/Project Plan.md")
         {
             "source": "Inbox/Quick Note.md",
-            "destination": "Projects/Research/Quick Note.md",
+            "destination": "Projects/Project Plan.md",
             "moved": true,
-            "links_updated": 0
+            "renamed": true,
+            "links_updated": 5,
+            "notes_updated": 3
         }
     """
     # Validate paths
@@ -52,6 +60,9 @@ async def move_note(
         if not is_valid:
             raise ValueError(f"Invalid {name} path: {error_msg}")
     
+    # Import link management functions
+    from ..tools.link_management import get_backlinks
+    
     # Sanitize paths
     source_path = sanitize_path(source_path)
     destination_path = sanitize_path(destination_path)
@@ -59,8 +70,18 @@ async def move_note(
     if source_path == destination_path:
         raise ValueError("Source and destination paths are the same")
     
+    # Extract filenames to check if name is changing
+    source_filename = source_path.split('/')[-1]
+    dest_filename = destination_path.split('/')[-1]
+    source_name = source_filename[:-3] if source_filename.endswith('.md') else source_filename
+    dest_name = dest_filename[:-3] if dest_filename.endswith('.md') else dest_filename
+    
+    name_changed = source_name != dest_name
+    
     if ctx:
         ctx.info(f"Moving note from {source_path} to {destination_path}")
+        if name_changed:
+            ctx.info(f"Filename is changing from '{source_filename}' to '{dest_filename}'")
     
     vault = get_vault()
     
@@ -78,11 +99,83 @@ async def move_note(
         # Good, destination doesn't exist
         pass
     
+    # If name is changing and update_links is True, update all backlinks before moving
+    links_updated = 0
+    notes_updated = 0
+    link_update_details = []
+    
+    if name_changed and update_links:
+        if ctx:
+            ctx.info(f"Filename changed - updating all links from '{source_name}' to '{dest_name}'")
+        
+        # Get all backlinks to the old note
+        backlinks_result = await get_backlinks(source_path, include_context=False, ctx=None)
+        backlinks = backlinks_result['findings']
+        
+        if ctx:
+            ctx.info(f"Found {len(backlinks)} backlinks to update")
+        
+        # Group backlinks by source note for efficient updating
+        updates_by_note = {}
+        for backlink in backlinks:
+            source = backlink['source_path']
+            if source not in updates_by_note:
+                updates_by_note[source] = []
+            updates_by_note[source].append(backlink)
+        
+        # Update each note that contains backlinks
+        for note_path, note_backlinks in updates_by_note.items():
+            try:
+                # Read the note
+                note = await vault.read_note(note_path)
+                content = note.content
+                original_content = content
+                updates_in_note = 0
+                
+                # Replace all wiki-style links to the old note
+                patterns_to_replace = [
+                    (re.compile(rf'\[\[{re.escape(source_name)}\]\]'), f'[[{dest_name}]]'),
+                    (re.compile(rf'\[\[{re.escape(source_name)}\.md\]\]'), f'[[{dest_name}.md]]'),
+                    (re.compile(rf'\[\[{re.escape(source_filename)}\]\]'), f'[[{dest_filename}]]'),
+                    # With aliases
+                    (re.compile(rf'\[\[{re.escape(source_name)}\|([^\]]+)\]\]'), rf'[[{dest_name}|\1]]'),
+                    (re.compile(rf'\[\[{re.escape(source_name)}\.md\|([^\]]+)\]\]'), rf'[[{dest_name}.md|\1]]'),
+                    (re.compile(rf'\[\[{re.escape(source_filename)}\|([^\]]+)\]\]'), rf'[[{dest_filename}|\1]]'),
+                ]
+                
+                # Apply all replacements
+                for pattern, replacement in patterns_to_replace:
+                    content, count = pattern.subn(replacement, content)
+                    updates_in_note += count
+                
+                # If content changed, write it back
+                if content != original_content:
+                    await vault.write_note(note_path, content, overwrite=True)
+                    links_updated += updates_in_note
+                    notes_updated += 1
+                    link_update_details.append({
+                        "note": note_path,
+                        "updates": updates_in_note
+                    })
+                    
+                    if ctx:
+                        ctx.info(f"Updated {updates_in_note} links in {note_path}")
+                
+            except Exception as e:
+                if ctx:
+                    ctx.info(f"Error updating links in {note_path}: {str(e)}")
+    
     # Create note at new location
     await vault.write_note(destination_path, source_note.content, overwrite=False)
     
     # Delete original note
     await vault.delete_note(source_path)
+    
+    if ctx:
+        if name_changed and update_links:
+            ctx.info(f"Successfully moved and renamed note, updated {links_updated} links")
+        else:
+            ctx.info(f"Successfully moved note")
     
     # Return standardized move operation structure
     return {
@@ -90,9 +183,12 @@ async def move_note(
         "source": source_path,
         "destination": destination_path,
         "type": "note",
+        "renamed": name_changed,
         "details": {
             "items_moved": 1,
-            "links_updated": 0  # Links don't need updating for moves
+            "links_updated": links_updated,
+            "notes_updated": notes_updated,
+            "link_update_details": link_update_details[:10] if name_changed else []
         }
     }
 
