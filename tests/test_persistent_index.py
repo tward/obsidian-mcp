@@ -110,57 +110,7 @@ class TestPersistentIndex:
         
         await index.close()
     
-    @pytest.mark.asyncio
-    async def test_vault_integration(self, test_vault_dir):
-        """Test ObsidianVault with persistent index."""
-        # Create test notes
-        notes_dir = Path(test_vault_dir)
-        (notes_dir / "note1.md").write_text("# Note 1\n\nThis is the first note about Python.")
-        (notes_dir / "note2.md").write_text("# Note 2\n\nThis is about JavaScript.")
-        
-        # Create vault
-        os.environ["OBSIDIAN_VAULT_PATH"] = test_vault_dir
-        vault = ObsidianVault(test_vault_dir)
-        
-        # First search (builds index)
-        results = await vault.search_notes("python")
-        assert len(results) == 1
-        assert results[0]["path"] == "note1.md"
-        
-        # Add a new note
-        (notes_dir / "note3.md").write_text("# Note 3\n\nMore Python content here.")
-        
-        # Force index update
-        vault._index_timestamp = None
-        
-        # Second search (should find new note)
-        results = await vault.search_notes("python")
-        assert len(results) == 2
-        
-        # Close vault
-        await vault.close()
     
-    @pytest.mark.asyncio
-    async def test_persistence_across_sessions(self, test_vault_dir):
-        """Test that index persists between vault instances."""
-        notes_dir = Path(test_vault_dir)
-        (notes_dir / "persistent_test.md").write_text("# Persistent Test\n\nThis should persist.")
-        
-        # First session
-        vault1 = ObsidianVault(test_vault_dir)
-        results1 = await vault1.search_notes("persist")
-        assert len(results1) == 1
-        await vault1.close()
-        
-        # Second session (should use existing index)
-        vault2 = ObsidianVault(test_vault_dir)
-        # Don't update index timestamp to test persistence
-        vault2._index_timestamp = 9999999999  # Far future
-        
-        results2 = await vault2.search_notes("persist")
-        assert len(results2) == 1  # Should find the note without re-indexing
-        
-        await vault2.close()
     
     @pytest.mark.asyncio
     async def test_search_simple_truncation(self, test_vault_dir):

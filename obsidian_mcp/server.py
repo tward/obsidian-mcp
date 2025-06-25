@@ -364,11 +364,11 @@ async def search_by_regex_tool(
     - Searching by tags or properties (use dedicated tools)
     
     Common patterns:
-    - URLs: r"https?://[^\s]+"
-    - Email: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-    - TODO comments: r"(TODO|FIXME)\s*:.*"
-    - Markdown headers: r"^#{1,6}\s+.*"
-    - Code blocks: r"```\w*\n[\s\S]*?```"
+    - URLs: r"https?://[^\\s]+"
+    - Email: r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    - TODO comments: r"(TODO|FIXME)\\s*:.*"
+    - Markdown headers: r"^#{1,6}\\s+.*"
+    - Code blocks: r"```\\w*\\n[\\s\\S]*?```"
     
     Returns:
         Notes containing regex matches with match details and context

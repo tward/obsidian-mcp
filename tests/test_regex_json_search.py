@@ -184,7 +184,7 @@ More text after the JSON block.
         # Should complete quickly even with complex pattern
         assert search_time < 2.0  # Should be much faster with optimizations
         
-        await vault.close()
+        # No need to close vault anymore
         
         print("\n✅ All JSON search tests passed!")
 
