@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2] - 2024-12-26
+
+### Added
+- **Auto-search functionality**: rename_note and move_note now automatically search for notes by filename when exact path not found
+  - Single match: automatically proceeds with the operation
+  - Multiple matches: shows helpful error listing all possible paths
+  - Reduces typical rename flow from 5 tool calls to just 1
+
+### Improved
+- **search_notes documentation**: Added prominent "Search operators" section with clear path: examples
+- **Search results clarity**: Added message when results are truncated showing "X of Y results"
+- **Error messages**: Enhanced with actionable suggestions, including search_notes('path:filename') hints
+
+### Technical Details
+- Comprehensive test coverage for auto-search functionality
+- Full backward compatibility maintained
+
 ## [2.1.1] - 2024-12-26
 
 ### Enhanced
