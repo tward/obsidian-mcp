@@ -331,11 +331,24 @@ async def search_notes_tool(
     - Locating notes with specific tags (supports hierarchical tags like #project/web)
     - Searching within specific folders
     - Finding notes by frontmatter properties
+    - Finding notes by filename (use path: prefix)
+    
+    Search operators:
+    - Default: searches note content
+    - "path:filename" - searches by filename/path (e.g., "path:Project_Tracker")
+    - "tag:tagname" - searches by tag (e.g., "tag:project", "tag:project/web")
+    - "folder:name" - searches within folder (e.g., "folder:Daily")
     
     Tag search supports hierarchical tags:
     - "tag:project" finds all project-related tags including project/web, project/mobile
     - "tag:web" finds any tag ending with "web" like project/web, design/web
     - "tag:project/web" finds exact hierarchical tag
+    
+    Examples:
+    - Search content: "machine learning"
+    - Find by filename: "path:Project_Tracker"
+    - Find by tag: "tag:important"
+    - Search in folder: "folder:Archive artificial intelligence"
     
     When NOT to use:
     - Searching by date (use search_by_date instead)

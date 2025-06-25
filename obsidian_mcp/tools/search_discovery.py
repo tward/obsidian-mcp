@@ -453,7 +453,7 @@ async def search_notes(
         metadata = vault.get_last_search_metadata() if not (query.startswith("tag:") or query.startswith("path:") or query.startswith("property:")) else None
         
         # Return standardized search results structure
-        return {
+        response = {
             "results": results,
             "count": len(results),
             "query": {
@@ -464,6 +464,12 @@ async def search_notes(
             "truncated": metadata.get("truncated", False) if metadata else False,
             "total_count": metadata.get("total_count", len(results)) if metadata else len(results)
         }
+        
+        # Add message if results are truncated
+        if response["truncated"] and response["total_count"] > response["count"]:
+            response["message"] = f"Showing {response['count']} of {response['total_count']} results. Use max_results parameter to see more."
+        
+        return response
     except Exception as e:
         if ctx:
             ctx.info(f"Search failed: {str(e)}")

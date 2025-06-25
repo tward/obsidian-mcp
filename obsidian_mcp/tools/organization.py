@@ -70,6 +70,44 @@ async def move_note(
     if source_path == destination_path:
         raise ValueError("Source and destination paths are the same")
     
+    vault = get_vault()
+    
+    # Check if source exists
+    try:
+        source_note = await vault.read_note(source_path)
+    except FileNotFoundError:
+        # If exact path not found, try to find the note by filename
+        if ctx:
+            ctx.info(f"Note not found at {source_path}, searching for filename...")
+        
+        # Import search function
+        from ..tools.search_discovery import search_notes
+        
+        # Search for notes with this filename
+        source_filename = source_path.split('/')[-1]
+        search_result = await search_notes(f"path:{source_filename}", max_results=10, ctx=None)
+        
+        if search_result["count"] == 0:
+            raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=source_path))
+        elif search_result["count"] == 1:
+            # Exactly one match - use it
+            found_path = search_result["results"][0]["path"]
+            if ctx:
+                ctx.info(f"Found unique match at: {found_path}")
+            
+            # Update source_path to the found path
+            source_path = found_path
+            
+            # Now try to read the note again
+            source_note = await vault.read_note(source_path)
+        else:
+            # Multiple matches - show them to the user
+            matches = [result["path"] for result in search_result["results"]]
+            matches_str = "\n  - ".join(matches)
+            raise ValueError(
+                f"Multiple notes found with name '{source_filename}'. Please specify the full path:\n  - {matches_str}"
+            )
+    
     # Extract filenames to check if name is changing
     source_filename = source_path.split('/')[-1]
     dest_filename = destination_path.split('/')[-1]
@@ -82,14 +120,6 @@ async def move_note(
         ctx.info(f"Moving note from {source_path} to {destination_path}")
         if name_changed:
             ctx.info(f"Filename is changing from '{source_filename}' to '{dest_filename}'")
-    
-    vault = get_vault()
-    
-    # Check if source exists
-    try:
-        source_note = await vault.read_note(source_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=source_path))
     
     # Check if destination already exists
     try:
@@ -250,7 +280,50 @@ async def rename_note(
     if old_path == new_path:
         raise ValueError("Old and new paths are the same")
     
-    # Extract directory and filename
+    vault = get_vault()
+    
+    # Check if source exists
+    try:
+        source_note = await vault.read_note(old_path)
+    except FileNotFoundError:
+        # If exact path not found, try to find the note by filename
+        if ctx:
+            ctx.info(f"Note not found at {old_path}, searching for filename...")
+        
+        # Import search function
+        from ..tools.search_discovery import search_notes
+        
+        # Search for notes with this filename
+        old_filename = old_path.split('/')[-1]
+        search_result = await search_notes(f"path:{old_filename}", max_results=10, ctx=None)
+        
+        if search_result["count"] == 0:
+            raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=old_path))
+        elif search_result["count"] == 1:
+            # Exactly one match - use it
+            found_path = search_result["results"][0]["path"]
+            if ctx:
+                ctx.info(f"Found unique match at: {found_path}")
+            
+            # Update old_path to the found path
+            old_path = found_path
+            
+            # Also update new_path to use the same directory
+            found_dir = '/'.join(found_path.split('/')[:-1]) if '/' in found_path else ''
+            new_filename = new_path.split('/')[-1]
+            new_path = f"{found_dir}/{new_filename}" if found_dir else new_filename
+            
+            # Now try to read the note again
+            source_note = await vault.read_note(old_path)
+        else:
+            # Multiple matches - show them to the user
+            matches = [result["path"] for result in search_result["results"]]
+            matches_str = "\n  - ".join(matches)
+            raise ValueError(
+                f"Multiple notes found with name '{old_filename}'. Please specify the full path:\n  - {matches_str}"
+            )
+    
+    # Now that we have the actual paths, extract directory and filename
     old_dir = '/'.join(old_path.split('/')[:-1]) if '/' in old_path else ''
     new_dir = '/'.join(new_path.split('/')[:-1]) if '/' in new_path else ''
     
@@ -265,14 +338,6 @@ async def rename_note(
     
     if ctx:
         ctx.info(f"Renaming note from {old_path} to {new_path}")
-    
-    vault = get_vault()
-    
-    # Check if source exists
-    try:
-        source_note = await vault.read_note(old_path)
-    except FileNotFoundError:
-        raise FileNotFoundError(ERROR_MESSAGES["note_not_found"].format(path=old_path))
     
     # Check if destination already exists
     try:

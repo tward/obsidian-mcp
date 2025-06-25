@@ -28,7 +28,8 @@ ERROR_MESSAGES = {
     "note_not_found": (
         "Note not found at path: '{path}'. "
         "To fix: 1) Check if the path is correct (case-sensitive), 2) Ensure the note exists in your vault, "
-        "3) Use list_notes to see available notes in the directory"
+        "3) Use search_notes('path:filename') to find notes by name, "
+        "4) Use list_notes to see available notes in the directory"
     ),
     "invalid_path": (
         "Invalid note path: '{path}'. "
