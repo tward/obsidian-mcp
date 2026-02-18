@@ -43,12 +43,6 @@ ERROR_MESSAGES = {
         "2) Use update_note to modify the existing note, "
         "3) Choose a different path for the new note"
     ),
-    "api_key_missing": (
-        "OBSIDIAN_REST_API_KEY environment variable not set. "
-        "To fix: 1) Open Obsidian settings > Community plugins > Local REST API, "
-        "2) Copy the API key shown there, "
-        "3) Set the environment variable: export OBSIDIAN_REST_API_KEY='your-key-here'"
-    ),
     "empty_search_query": (
         "Search query cannot be empty. "
         "Valid queries: 1) Keywords: 'machine learning', "

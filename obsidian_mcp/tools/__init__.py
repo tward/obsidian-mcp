@@ -25,11 +25,15 @@ from .organization import (
     remove_tags,
     get_note_info,
     list_tags,
+    batch_update_properties,
 )
 from .link_management import (
     get_backlinks,
     get_outgoing_links,
     find_broken_links,
+)
+from .find_orphaned_notes import (
+    find_orphaned_notes,
 )
 from .image_management import (
     read_image,
@@ -62,10 +66,12 @@ __all__ = [
     "remove_tags",
     "get_note_info",
     "list_tags",
+    "batch_update_properties",
     # Link management
     "get_backlinks",
     "get_outgoing_links",
     "find_broken_links",
+    "find_orphaned_notes",
     # Image management
     "read_image",
     "view_note_images",

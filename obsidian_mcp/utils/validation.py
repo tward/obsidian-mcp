@@ -39,8 +39,9 @@ def validate_note_path(path: str) -> Tuple[bool, Optional[str]]:
     if not any(path.endswith(ext) for ext in MARKDOWN_EXTENSIONS):
         return False, ERROR_MESSAGES["invalid_path"].format(path=path)
     
-    # Check for invalid characters
-    invalid_chars = ["<", ">", ":", '"', "|", "?", "*"]
+    # Check for invalid characters (Windows-specific restrictions)
+    # Note: We allow quotes since they're valid on macOS/Linux
+    invalid_chars = ["<", ">", ":", "|", "?", "*"]
     for char in invalid_chars:
         if char in path:
             return False, ERROR_MESSAGES["invalid_path"].format(path=path)

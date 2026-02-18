@@ -446,8 +446,37 @@ async def search_notes(
             # Property search
             results = await _search_by_property(vault, query, context_length)
         else:
-            # Regular content search
-            results = await vault.search_notes(query, context_length, max_results)
+            # Enhanced default search: search both content AND filenames
+            # First, get content search results
+            content_results = await vault.search_notes(query, context_length, max_results * 2)  # Get more to allow merging
+            
+            # Also search by path/filename
+            path_results = await _search_by_path(vault, query, context_length)
+            
+            # Merge results with filename matches scored higher
+            # Create a dict to track seen paths and avoid duplicates
+            seen_paths = set()
+            merged_results = []
+            
+            # Add path matches first (higher priority)
+            for result in path_results:
+                if result["path"] not in seen_paths:
+                    # Boost score for filename matches
+                    result["score"] = result.get("score", 1.0) * 2.0
+                    result["match_type"] = "filename"
+                    merged_results.append(result)
+                    seen_paths.add(result["path"])
+            
+            # Add content matches that aren't already in results
+            for result in content_results:
+                if result["path"] not in seen_paths:
+                    result["match_type"] = "content"
+                    merged_results.append(result)
+                    seen_paths.add(result["path"])
+            
+            # Sort by score (descending) and limit results
+            merged_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            results = merged_results[:max_results]
         
         # Get search metadata if available (for content searches)
         metadata = vault.get_last_search_metadata() if not (query.startswith("tag:") or query.startswith("path:") or query.startswith("property:")) else None

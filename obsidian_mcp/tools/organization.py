@@ -1070,20 +1070,35 @@ def _update_frontmatter_tags(content: str, tags: List[str], operation: str) -> s
     lines = frontmatter.split('\n')
     new_lines = []
     tags_found = False
+    in_tags_list = False
+    existing_tags = []
     
-    for line in lines:
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        
         if line.startswith('tags:'):
             tags_found = True
-            # Parse existing tags
-            existing_tags = []
+            # Check if tags are on the same line
             if '[' in line:
                 # Array format: tags: [tag1, tag2]
                 match = re.search(r'\[(.*?)\]', line)
                 if match:
-                    existing_tags = [t.strip().strip('"').strip("'") for t in match.group(1).split(',')]
+                    existing_tags = [t.strip().strip('"').strip("'") for t in match.group(1).split(',') if t.strip()]
             elif line.strip() != 'tags:':
                 # Inline format: tags: tag1 tag2
                 existing_tags = line.split(':', 1)[1].strip().split()
+            else:
+                # Bullet list format on next lines
+                in_tags_list = True
+                i += 1
+                # Parse all bullet list items
+                while i < len(lines) and lines[i].strip().startswith('- '):
+                    tag = lines[i].strip()[2:].strip()
+                    if tag:
+                        existing_tags.append(tag)
+                    i += 1
+                i -= 1  # Back up one since the outer loop will increment
             
             # Update tags based on operation
             if operation == "add":
@@ -1102,13 +1117,14 @@ def _update_frontmatter_tags(content: str, tags: List[str], operation: str) -> s
                 new_lines.append(f"tags: [{', '.join(existing_tags)}]")
             # Skip line if no tags remain
             
-        elif line.strip().startswith('- ') and tags_found and not line.startswith(' '):
-            # This might be a tag in list format, skip for now
-            continue
+        elif in_tags_list and line.strip().startswith('- '):
+            # Skip bullet list items - they've already been processed
+            pass
         else:
             new_lines.append(line)
-            if line.strip() == '' or not line.startswith(' '):
-                tags_found = False
+            in_tags_list = False
+        
+        i += 1
     
     # If no tags were found and we're adding or replacing, add them
     if not tags_found and operation in ["add", "replace"]:
@@ -1122,6 +1138,7 @@ def _update_frontmatter_tags(content: str, tags: List[str], operation: str) -> s
 async def list_tags(
     include_counts: bool = True,
     sort_by: str = "name",
+    include_files: bool = False,
     ctx=None
 ) -> dict:
     """
@@ -1134,6 +1151,7 @@ async def list_tags(
     Args:
         include_counts: Whether to include usage count for each tag (default: true)
         sort_by: How to sort results - "name" (alphabetical) or "count" (by usage) (default: "name")
+        include_files: Whether to include file paths for each tag (default: false)
         ctx: MCP context for progress reporting
         
     Returns:
@@ -1142,12 +1160,23 @@ async def list_tags(
     Example:
         >>> await list_tags(include_counts=True, sort_by="count")
         {
-            "total_tags": 25,
-            "tags": [
+            "items": [
                 {"name": "project", "count": 42},
                 {"name": "meeting", "count": 38},
                 {"name": "idea", "count": 15}
-            ]
+            ],
+            "total": 25,
+            "scope": {"include_counts": true, "sort_by": "count", "include_files": false}
+        }
+        
+        >>> await list_tags(include_files=True, include_counts=False)
+        {
+            "items": [
+                {"name": "project", "files": ["Projects/Web App.md", "Projects/Mobile App.md"]},
+                {"name": "meeting", "files": ["Meetings/2024-01-15.md", "Meetings/2024-01-22.md"]}
+            ],
+            "total": 2,
+            "scope": {"include_counts": false, "sort_by": "name", "include_files": true}
         }
     """
     # Validate sort_by parameter
@@ -1159,8 +1188,9 @@ async def list_tags(
     
     vault = get_vault()
     
-    # Dictionary to store tag counts
+    # Dictionary to store tag counts and file paths
     tag_counts = {}
+    tag_files = {} if include_files else None
     
     try:
         # Get all notes in the vault
@@ -1181,28 +1211,39 @@ async def list_tags(
                 try:
                     note = await vault.read_note(note_info["path"])
                     if note and note.metadata and note.metadata.tags:
-                        return note.metadata.tags
+                        return (note_info["path"], note.metadata.tags)
                 except Exception:
-                    return []
-                return []
+                    return (note_info["path"], [])
+                return (note_info["path"], [])
         
         # Process all notes concurrently with semaphore limiting
         tasks = [process_note(note_info) for note_info in all_notes]
         results = await asyncio.gather(*tasks)
         
-        # Count tags
-        for tags in results:
+        # Count tags and collect file paths
+        for path, tags in results:
             for tag in tags:
                 if tag:
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                    if include_files:
+                        if tag not in tag_files:
+                            tag_files[tag] = []
+                        tag_files[tag].append(path)
         
         # Format results
-        if include_counts:
-            tags = [{"name": tag, "count": count} for tag, count in tag_counts.items()]
+        if include_counts or include_files:
+            tags = []
+            for tag, count in tag_counts.items():
+                tag_item = {"name": tag}
+                if include_counts:
+                    tag_item["count"] = count
+                if include_files and tag in tag_files:
+                    tag_item["files"] = sorted(tag_files[tag])
+                tags.append(tag_item)
             
             # Sort based on preference
             if sort_by == "count":
-                tags.sort(key=lambda x: x["count"], reverse=True)
+                tags.sort(key=lambda x: x.get("count", 0), reverse=True)
             else:  # sort by name
                 tags.sort(key=lambda x: x["name"].lower())
         else:
@@ -1215,7 +1256,8 @@ async def list_tags(
             "total": len(tag_counts),
             "scope": {
                 "include_counts": include_counts,
-                "sort_by": sort_by
+                "sort_by": sort_by,
+                "include_files": include_files
             }
         }
         
@@ -1223,3 +1265,337 @@ async def list_tags(
         if ctx:
             ctx.info(f"Failed to list tags: {str(e)}")
         raise ValueError(ERROR_MESSAGES["tag_collection_failed"].format(error=str(e)))
+
+
+def _update_frontmatter_properties(content: str, property_updates: dict, properties_to_remove: List[str] = None) -> str:
+    """
+    Update multiple frontmatter properties while preserving YAML structure.
+    
+    Args:
+        content: Note content with frontmatter
+        property_updates: Dict of properties to add/update {property: value}
+        properties_to_remove: List of property names to remove
+        
+    Returns:
+        Updated content with modified frontmatter
+    """
+    import yaml
+    from io import StringIO
+    
+    properties_to_remove = properties_to_remove or []
+    
+    # Check if frontmatter exists
+    if not content.startswith("---\n"):
+        # Create frontmatter if properties to add
+        if property_updates:
+            # Use yaml.dump to ensure proper formatting
+            yaml_content = yaml.dump(property_updates, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            return f"---\n{yaml_content}---\n\n{content}"
+        return content
+    
+    # Parse existing frontmatter
+    try:
+        end_index = content.index("\n---\n", 4) + 5
+        frontmatter_str = content[4:end_index-5]
+        rest_of_content = content[end_index:]
+    except ValueError:
+        # Invalid frontmatter
+        return content
+    
+    # Parse YAML
+    try:
+        frontmatter = yaml.safe_load(frontmatter_str) or {}
+    except yaml.YAMLError:
+        # If YAML parsing fails, return original
+        return content
+    
+    # Update properties
+    for key, value in property_updates.items():
+        if value is None and key not in properties_to_remove:
+            properties_to_remove.append(key)
+        else:
+            frontmatter[key] = value
+    
+    # Remove properties
+    for prop in properties_to_remove:
+        frontmatter.pop(prop, None)
+    
+    # Special handling for tags to ensure list format
+    if 'tags' in frontmatter and isinstance(frontmatter['tags'], str):
+        # Convert string tags to list
+        frontmatter['tags'] = [frontmatter['tags']]
+    
+    # Dump back to YAML
+    if frontmatter:
+        yaml_content = yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        # Remove the trailing newline that yaml.dump adds
+        yaml_content = yaml_content.rstrip('\n')
+        return f"---\n{yaml_content}\n---\n{rest_of_content}"
+    else:
+        # No frontmatter left
+        return rest_of_content.lstrip('\n')
+
+
+def _remove_inline_tags(content: str, tags_to_remove: List[str]) -> tuple[str, int]:
+    """
+    Remove inline tags from note body while preserving frontmatter.
+    
+    Args:
+        content: Full note content
+        tags_to_remove: List of tags to remove (without # prefix)
+        
+    Returns:
+        Tuple of (updated content, number of tags removed)
+    """
+    if not tags_to_remove:
+        return content, 0
+    
+    # Skip frontmatter if it exists
+    body_start = 0
+    if content.startswith("---\n"):
+        try:
+            end_index = content.index("\n---\n", 4) + 5
+            body_start = end_index
+        except ValueError:
+            pass
+    
+    frontmatter = content[:body_start] if body_start > 0 else ""
+    body = content[body_start:]
+    
+    # Remove code blocks to avoid modifying tags in code
+    code_blocks = []
+    
+    # Remove fenced code blocks
+    def replace_code_block(match):
+        code_blocks.append(match.group(0))
+        return f"__CODE_BLOCK_{len(code_blocks)-1}__"
+    
+    body_no_code = re.sub(r'```[\s\S]*?```', replace_code_block, body)
+    
+    # Remove inline code
+    inline_code = []
+    def replace_inline_code(match):
+        inline_code.append(match.group(0))
+        return f"__INLINE_CODE_{len(inline_code)-1}__"
+    
+    body_no_code = re.sub(r'`[^`]+`', replace_inline_code, body_no_code)
+    
+    # Remove tags
+    tags_removed = 0
+    for tag in tags_to_remove:
+        # Escape special regex characters
+        escaped_tag = re.escape(tag)
+        # Match #tag at word boundaries (not part of URL or other text)
+        pattern = rf'(^|\s)#{escaped_tag}(?=\s|$|\.|,|;|:|!|\?|\))'
+        
+        # Count matches before replacing
+        matches = re.findall(pattern, body_no_code)
+        tags_removed += len(matches)
+        
+        # Remove the tags (keep the whitespace before the tag)
+        body_no_code = re.sub(pattern, r'\1', body_no_code)
+    
+    # Clean up multiple spaces left by removal
+    body_no_code = re.sub(r'  +', ' ', body_no_code)
+    
+    # Restore code blocks
+    for i, block in enumerate(code_blocks):
+        body_no_code = body_no_code.replace(f"__CODE_BLOCK_{i}__", block)
+    
+    for i, code in enumerate(inline_code):
+        body_no_code = body_no_code.replace(f"__INLINE_CODE_{i}__", code)
+    
+    return frontmatter + body_no_code, tags_removed
+
+
+async def batch_update_properties(
+    search_criteria: dict,
+    property_updates: dict = None,
+    properties_to_remove: List[str] = None,
+    add_tags: List[str] = None,
+    remove_tags: List[str] = None,
+    remove_inline_tags: bool = False,
+    ctx=None
+) -> dict:
+    """
+    Batch update properties across multiple notes.
+    
+    Args:
+        search_criteria: How to find notes - dict with one of:
+            - 'query': Search query string
+            - 'folder': Folder path to process
+            - 'files': Explicit list of file paths
+        property_updates: Dict of properties to add/update
+        properties_to_remove: List of property names to remove
+        add_tags: List of tags to add (additive)
+        remove_tags: List of tags to remove
+        remove_inline_tags: Whether to also remove tags from note body
+        ctx: MCP context for progress reporting
+        
+    Returns:
+        Dict with operation results and affected files
+    """
+    vault = get_vault()
+    
+    # Validate search criteria
+    if not search_criteria:
+        raise ValueError(
+            "search_criteria is required. Provide one of: "
+            "1) {'query': 'tag:project'} for search-based selection, "
+            "2) {'folder': 'Projects', 'recursive': true} for folder-based selection, "
+            "3) {'files': ['Note1.md', 'Note2.md']} for specific files"
+        )
+    
+    if not any(k in search_criteria for k in ['query', 'folder', 'files']):
+        raise ValueError(
+            "search_criteria must include exactly one selection method: "
+            "'query' (search string), 'folder' (directory path), or 'files' (list of paths). "
+            f"Received: {list(search_criteria.keys())}"
+        )
+    
+    # Validate that at least one operation is specified
+    if not any([property_updates, properties_to_remove, add_tags, remove_tags]):
+        raise ValueError(
+            "No operations specified. Provide at least one of: "
+            "property_updates (to add/update properties), "
+            "properties_to_remove (to delete properties), "
+            "add_tags (to add tags), or "
+            "remove_tags (to remove tags)"
+        )
+    
+    # Find notes to update
+    notes_to_update = []
+    
+    if 'files' in search_criteria:
+        # Explicit file list
+        for file_path in search_criteria['files']:
+            try:
+                note = await vault.read_note(file_path)
+                if note:
+                    notes_to_update.append(file_path)
+            except Exception:
+                pass  # Skip invalid files
+    
+    elif 'folder' in search_criteria:
+        # All notes in folder
+        folder = search_criteria['folder']
+        all_notes = await vault.list_notes(directory=folder, recursive=search_criteria.get('recursive', True))
+        notes_to_update = [note['path'] for note in all_notes]
+    
+    elif 'query' in search_criteria:
+        # Search results
+        from .search_discovery import search_notes
+        results = await search_notes(
+            query=search_criteria['query'],
+            max_results=search_criteria.get('max_results', 500),
+            ctx=ctx
+        )
+        notes_to_update = [r['path'] for r in results['results']]
+    
+    if ctx:
+        ctx.info(f"Found {len(notes_to_update)} notes to update")
+    
+    # Process each note
+    results = {
+        'total_notes': len(notes_to_update),
+        'updated': 0,
+        'failed': 0,
+        'details': [],
+        'errors': []
+    }
+    
+    for note_path in notes_to_update:
+        try:
+            # Read note
+            note = await vault.read_note(note_path)
+            if not note:
+                results['errors'].append({
+                    'path': note_path,
+                    'error': 'Note not found'
+                })
+                results['failed'] += 1
+                continue
+            
+            content = note.content
+            original_content = content
+            changes_made = []
+            
+            # Handle special tag operations first
+            if add_tags or remove_tags:
+                # Get current tags from frontmatter
+                current_tags = note.metadata.frontmatter.get('tags', [])
+                if isinstance(current_tags, str):
+                    current_tags = [current_tags]
+                elif not isinstance(current_tags, list):
+                    current_tags = list(current_tags) if current_tags else []
+                
+                updated_tags = current_tags.copy()
+                
+                # Remove tags
+                if remove_tags:
+                    for tag in remove_tags:
+                        if tag in updated_tags:
+                            updated_tags.remove(tag)
+                            changes_made.append(f"Removed tag '{tag}' from frontmatter")
+                
+                # Add tags
+                if add_tags:
+                    for tag in add_tags:
+                        if tag not in updated_tags:
+                            updated_tags.append(tag)
+                            changes_made.append(f"Added tag '{tag}' to frontmatter")
+                
+                # Update frontmatter if tags changed
+                if updated_tags != current_tags:
+                    if property_updates is None:
+                        property_updates = {}
+                    property_updates['tags'] = updated_tags
+            
+            # Update frontmatter properties
+            if property_updates or properties_to_remove:
+                content = _update_frontmatter_properties(
+                    content,
+                    property_updates or {},
+                    properties_to_remove
+                )
+                
+                # Track changes
+                if property_updates:
+                    for prop, value in property_updates.items():
+                        if prop != 'tags':  # Already tracked above
+                            changes_made.append(f"Set {prop} = {value}")
+                
+                if properties_to_remove:
+                    for prop in properties_to_remove:
+                        changes_made.append(f"Removed property '{prop}'")
+            
+            # Remove inline tags if requested
+            inline_tags_removed = 0
+            if remove_inline_tags and remove_tags:
+                content, inline_tags_removed = _remove_inline_tags(content, remove_tags)
+                if inline_tags_removed > 0:
+                    changes_made.append(f"Removed {inline_tags_removed} inline tags")
+            
+            # Update note if changed
+            if content != original_content:
+                await vault.write_note(note_path, content, overwrite=True)
+                results['updated'] += 1
+                results['details'].append({
+                    'path': note_path,
+                    'changes': changes_made
+                })
+            
+            if ctx and results['updated'] % 10 == 0:
+                ctx.info(f"Updated {results['updated']} notes...")
+                
+        except Exception as e:
+            results['errors'].append({
+                'path': note_path,
+                'error': str(e)
+            })
+            results['failed'] += 1
+    
+    if ctx:
+        ctx.info(f"Batch update complete: {results['updated']} updated, {results['failed']} failed")
+    
+    return results
