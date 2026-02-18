@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "obsidian-mcp"
-version = "2.1.2"
+version = "2.1.7"
 description = "MCP server for interacting with Obsidian vaults through direct filesystem access"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    {name = "Nate Strong", email = "nathanstrong.fx@gmail.com"}
+    {name = "Nate Strong", email = "nathanstrong.fx@gmail.com"},
+    {name = "Tom Ward"}
 ]
 keywords = ["mcp", "obsidian", "fastmcp", "llm", "ai", "notes", "knowledge-management"]
 classifiers = [
@@ -23,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.8.1",
+    "fastmcp>=2.14.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
     "aiofiles>=23.0.0",
@@ -40,9 +41,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/natestrong/obsidian-mcp"
-Repository = "https://github.com/natestrong/obsidian-mcp"
-Issues = "https://github.com/natestrong/obsidian-mcp/issues"
+Homepage = "https://github.com/tward/obsidian-mcp"
+Repository = "https://github.com/tward/obsidian-mcp"
+Issues = "https://github.com/tward/obsidian-mcp/issues"
 
 [project.scripts]
 obsidian-mcp = "obsidian_mcp.server:main"
