@@ -2,7 +2,7 @@
 
 import os
 import logging
-from typing import Annotated, Optional, List, Literal
+from typing import Annotated, Optional, List, Literal, Union
 from pydantic import Field
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -36,9 +36,11 @@ from .tools import (
     remove_tags,
     get_note_info,
     list_tags,
+    batch_update_properties,
     get_backlinks,
     get_outgoing_links,
     find_broken_links,
+    find_orphaned_notes,
     read_image,
     view_note_images,
 )
@@ -297,14 +299,14 @@ async def delete_note_tool(
 @mcp.tool()
 async def search_notes_tool(
     query: Annotated[str, Field(
-        description="What to search for in your notes. Use plain text or special prefixes: 'tag:' for tags (supports hierarchical tags), 'path:' for folders/filenames, 'property:' for metadata.",
+        description="Search query that matches BOTH filenames and content by default. Just type a note name to find it! Use prefixes for specific search types: 'tag:' for tags, 'path:' for ONLY filenames, 'property:' for metadata.",
         min_length=1,
         max_length=500,
         examples=[
+            "Meeting Notes",
+            "Obsidian Tag Refactor",
             "machine learning",
             "tag:project",
-            "tag:project/web",
-            "tag:urgent",
             "path:Daily/",
             "property:status:active"
         ]
@@ -324,40 +326,44 @@ async def search_notes_tool(
     ctx=None
 ):
     """
-    Search for notes containing specific text or matching search criteria.
+    Search for notes by filename or content, with smart ranking.
+    
+    DEFAULT BEHAVIOR (NEW): Searches BOTH note filenames AND content automatically.
+    Filename matches are ranked higher than content matches for better discovery.
     
     When to use:
-    - Finding notes by content keywords
-    - Locating notes with specific tags (supports hierarchical tags like #project/web)
+    - Finding a note when you know part of its name (just type the name)
+    - Finding notes containing specific content
+    - Locating notes with specific tags
     - Searching within specific folders
     - Finding notes by frontmatter properties
-    - Finding notes by filename (use path: prefix)
     
-    Search operators:
-    - Default: searches note content
-    - "path:filename" - searches by filename/path (e.g., "path:Project_Tracker")
-    - "tag:tagname" - searches by tag (e.g., "tag:project", "tag:project/web")
-    - "folder:name" - searches within folder (e.g., "folder:Daily")
+    Search modes:
+    - Default: searches BOTH filenames and content (filename matches ranked higher)
+      Example: "tag refactor" finds "Obsidian Tag Refactor.md" AND notes mentioning "tag refactor"
+    - "path:text" - searches ONLY in filenames/paths
+    - "tag:tagname" - searches by tag (supports hierarchical tags)
+    - "property:name:value" - searches by frontmatter properties
+    
+    Examples:
+    - Find a note by name: "Project Tracker" (will find "Project Tracker.md" first)
+    - Search content only: Use explicit path: prefix to exclude: "path:Project"
+    - Find by tag: "tag:important" or "tag:project/web"
+    - Find by property: "property:status:active"
     
     Tag search supports hierarchical tags:
     - "tag:project" finds all project-related tags including project/web, project/mobile
     - "tag:web" finds any tag ending with "web" like project/web, design/web
-    - "tag:project/web" finds exact hierarchical tag
-    
-    Examples:
-    - Search content: "machine learning"
-    - Find by filename: "path:Project_Tracker"
-    - Find by tag: "tag:important"
-    - Search in folder: "folder:Archive artificial intelligence"
     
     When NOT to use:
     - Searching by date (use search_by_date instead)
     - Listing all notes (use list_notes for better performance)
-    - Finding a specific known note (use read_note directly)
+    - Reading a specific note when you know the exact path (use read_note directly)
     
     Returns:
         Search results with matched notes, relevance scores, and context.
-        Response includes total_count and truncated fields when limit is reached.
+        Filename matches have higher scores than content matches.
+        Response includes match_type field: "filename" or "content".
     """
     try:
         return await search_notes(query, context_length, max_results, ctx)
@@ -1081,6 +1087,97 @@ async def find_broken_links_tool(
         raise ToolError(f"Failed to find broken links: {str(e)}")
 
 @mcp.tool()
+async def find_orphaned_notes_tool(
+    orphan_type: Annotated[Literal["no_backlinks", "no_links", "no_tags", "no_metadata", "isolated"], Field(
+        description="What makes a note 'orphaned'. Choose the criteria that best fits your organization needs.",
+        default="no_backlinks"
+    )] = "no_backlinks",
+    exclude_folders: Annotated[Optional[Union[List[str], str]], Field(
+        description="Folders to exclude from search. Useful for skipping templates, archives, or daily notes. Can be a list or JSON string.",
+        default=None,
+        examples=[["Templates", "Archive"], '["Daily", "Templates", "Inbox"]']
+    )] = None,
+    min_age_days: Annotated[Optional[int], Field(
+        description="Only include notes older than this many days. Helps exclude recent work-in-progress notes.",
+        default=None,
+        ge=0,
+        le=365,
+        examples=[7, 30, 90]
+    )] = None,
+    ctx=None
+):
+    """
+    Find orphaned notes that may need organization or cleanup.
+    
+    When to use:
+    - Regular vault maintenance and cleanup
+    - Finding forgotten or disconnected notes
+    - Identifying notes that need better organization
+    - Preparing for vault reorganization
+    - Finding candidates for archival or deletion
+    
+    Orphan types explained:
+    - **no_backlinks**: Notes with no incoming links (most common definition)
+    - **no_links**: Notes with no incoming OR outgoing links (completely isolated)
+    - **no_tags**: Notes without any tags (untagged content)
+    - **no_metadata**: Notes with minimal/no frontmatter properties
+    - **isolated**: Notes with no links AND no tags (truly disconnected)
+    
+    Default exclusions:
+    - Templates folder (usually contains reference notes)
+    - Archive folder (already organized)
+    - Daily folder (daily notes often standalone)
+    
+    When NOT to use:
+    - Finding specific notes (use search_notes)
+    - Getting all notes in a folder (use list_notes)
+    - Finding notes by content (use search tools)
+    
+    Performance note:
+    - Scans entire vault and checks links/metadata for each note
+    - For vaults >1000 notes, this may take 10-30 seconds
+    
+    Returns:
+        List of orphaned notes with paths, reasons, and metadata.
+        Results are sorted by modification date (oldest first).
+        
+    Example response:
+    {
+        "count": 23,
+        "orphaned_notes": [
+            {
+                "path": "Random Thoughts/Old Idea.md",
+                "reason": "No incoming links",
+                "modified": "2023-06-15T10:30:00Z",
+                "size": 245,
+                "word_count": 42
+            }
+        ],
+        "stats": {
+            "total_notes_scanned": 500,
+            "excluded_folders": ["Templates", "Archive", "Daily"],
+            "orphan_type": "no_backlinks"
+        }
+    }
+    """
+    try:
+        # Parse exclude_folders if it's a JSON string
+        if isinstance(exclude_folders, str):
+            try:
+                import json
+                exclude_folders = json.loads(exclude_folders)
+                if not isinstance(exclude_folders, list):
+                    raise ValueError("exclude_folders must be a list")
+            except json.JSONDecodeError:
+                raise ToolError("Invalid JSON format for exclude_folders. Expected a JSON array like: [\"Daily\", \"Templates\"]")
+        
+        return await find_orphaned_notes(orphan_type, exclude_folders, min_age_days, ctx)
+    except ValueError as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(f"Failed to find orphaned notes: {str(e)}")
+
+@mcp.tool()
 async def list_tags_tool(
     include_counts: Annotated[bool, Field(
         description="Show how many times each tag is used across your vault",
@@ -1090,6 +1187,10 @@ async def list_tags_tool(
         description="Sort tags alphabetically by 'name' or by popularity with 'count'",
         default="name"
     )] = "name",
+    include_files: Annotated[bool, Field(
+        description="Include the list of file paths that contain each tag",
+        default=False
+    )] = False,
     ctx=None
 ):
     """
@@ -1101,11 +1202,17 @@ async def list_tags_tool(
     - Finding underused or overused tags
     - Discovering tag variations (e.g., 'project' vs 'projects')
     - Understanding hierarchical tag structures in your vault
+    - Finding all files that use a specific tag (with include_files=true)
     
     Hierarchical tags:
     - Lists both parent and full hierarchical paths (e.g., both "project" and "project/web")
     - Shows how nested tags are organized in your vault
     - Helps identify opportunities for better tag organization
+    
+    File paths (with include_files=true):
+    - Returns a list of all file paths that contain each tag
+    - Useful for bulk operations on files with specific tags
+    - Paths are relative to vault root
     
     When NOT to use:
     - Getting tags for a specific note (use get_note_info)
@@ -1116,16 +1223,135 @@ async def list_tags_tool(
     - For vaults with 1000-5000 notes: Moderate (3-10 seconds)
     - For vaults with >5000 notes: May be slow (10+ seconds)
     - Uses batched concurrent requests to optimize performance
+    - include_files=true adds minimal overhead
     
     Returns:
-        All unique tags with optional usage counts
+        All unique tags with optional usage counts and file paths
     """
     try:
-        return await list_tags(include_counts, sort_by, ctx)
+        return await list_tags(include_counts, sort_by, include_files, ctx)
     except ValueError as e:
         raise ToolError(str(e))
     except Exception as e:
         raise ToolError(f"Failed to list tags: {str(e)}")
+
+@mcp.tool()
+async def batch_update_properties_tool(
+    search_criteria: Annotated[dict, Field(
+        description="How to find notes to update. Must include one of: 'query' (search string), 'folder' (folder path), or 'files' (list of paths). Use 'query' for complex searches, 'folder' for directory operations, 'files' for specific notes.",
+        examples=[
+            {"query": "tag:project status:active"},
+            {"folder": "Projects", "recursive": True},
+            {"files": ["Projects/A.md", "Projects/B.md"]}
+        ]
+    )],
+    property_updates: Annotated[Optional[dict], Field(
+        description="Properties to add or update in frontmatter. Set value to null to remove.",
+        default=None,
+        examples=[
+            {"status": "completed", "priority": 1},
+            {"year": 2024, "archived": True}
+        ]
+    )] = None,
+    properties_to_remove: Annotated[Optional[List[str]], Field(
+        description="List of property names to remove from frontmatter",
+        default=None,
+        examples=[["draft", "temp"], ["old_status", "deprecated_field"]]
+    )] = None,
+    add_tags: Annotated[Optional[Union[List[str], str]], Field(
+        description="Tags to add to notes (additive, won't remove existing tags). Can be a list or JSON string.",
+        default=None,
+        examples=[["archived", "2024"], ["reviewed", "approved"], '["archived", "2024"]']
+    )] = None,
+    remove_tags: Annotated[Optional[Union[List[str], str]], Field(
+        description="Tags to remove from notes. Can be a list or JSON string.",
+        default=None,
+        examples=[["draft", "todo"], ["urgent", "needs-review"], '["draft", "todo"]']
+    )] = None,
+    remove_inline_tags: Annotated[bool, Field(
+        description="Also remove tags from note body (inline #tags). Only applies when remove_tags is specified.",
+        default=False
+    )] = False,
+    ctx=None
+):
+    """
+    Batch update properties across multiple notes.
+    
+    When to use:
+    - Updating metadata across many notes (status, priority, etc.)
+    - Bulk tag operations (add/remove tags from multiple notes)
+    - Archiving projects (set archived=true, add year property)
+    - Cleaning up properties (remove outdated fields)
+    - Normalizing metadata across your vault
+    
+    Search criteria options:
+    - query: Use search syntax (tag:project, folder:Archive, property:status:active)
+    - folder: Process all notes in a folder (with optional recursive flag)
+    - files: Explicit list of file paths
+    
+    Property operations:
+    - Add/update any frontmatter property
+    - Remove properties by name
+    - Special handling for tags (add/remove with deduplication)
+    - Remove inline #tags from note body (optional)
+    
+    Examples:
+    - Archive completed projects: query="tag:project status:completed", property_updates={"archived": true, "year": 2024}
+    - Clean up draft tags: query="tag:draft", remove_tags=["draft"], remove_inline_tags=true
+    - Update all notes in folder: folder="Projects/2023", property_updates={"year": 2023}
+    
+    When NOT to use:
+    - Single note updates (use update_note, add_tags, etc.)
+    - Complex content changes (this only updates frontmatter)
+    
+    Returns:
+        {
+            "total_notes": 10,         # Total notes found matching criteria
+            "updated": 8,              # Successfully updated notes
+            "failed": 2,               # Failed updates
+            "details": [...],          # List of changes per note
+            "errors": [...]            # List of errors with paths and reasons
+        }
+    """
+    try:
+        import json
+        
+        # Parse string inputs if needed
+        if isinstance(add_tags, str):
+            try:
+                add_tags = json.loads(add_tags)
+                if not isinstance(add_tags, list):
+                    raise ValueError("add_tags must be a list when parsed from JSON string")
+            except json.JSONDecodeError as e:
+                raise ToolError(
+                    f"Invalid JSON in add_tags parameter: {str(e)}. "
+                    "Expected format: '[\"tag1\", \"tag2\"]' or use a list directly."
+                )
+        
+        if isinstance(remove_tags, str):
+            try:
+                remove_tags = json.loads(remove_tags)
+                if not isinstance(remove_tags, list):
+                    raise ValueError("remove_tags must be a list when parsed from JSON string")
+            except json.JSONDecodeError as e:
+                raise ToolError(
+                    f"Invalid JSON in remove_tags parameter: {str(e)}. "
+                    "Expected format: '[\"tag1\", \"tag2\"]' or use a list directly."
+                )
+        
+        return await batch_update_properties(
+            search_criteria,
+            property_updates,
+            properties_to_remove,
+            add_tags,
+            remove_tags,
+            remove_inline_tags,
+            ctx
+        )
+    except ValueError as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(f"Failed to batch update properties: {str(e)}")
 
 @mcp.tool()
 async def read_image_tool(

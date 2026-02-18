@@ -1,4 +1,6 @@
-# Obsidian MCP Server
+# Obsidian MCP Server (Fork)
+
+> **This is a maintained fork of [TheStrong1/obsidian-mcp](https://github.com/TheStrong1/obsidian-mcp).** This fork brings the codebase to v2.1.6 parity and fixes a breaking `fastmcp` import issue (`from fastmcp import Image` was removed in fastmcp v2.14.0).
 
 ## 🎉 Version 2.0 Released!
 
@@ -152,7 +154,7 @@ Here are some example prompts to get started:
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/natestrong/obsidian-mcp
+   git clone https://github.com/tward/obsidian-mcp
    cd obsidian-mcp
    ```
 
